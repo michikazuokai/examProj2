@@ -1,4 +1,4 @@
-# version_assign.yaml
+# studentVesion.yaml
 
 ## 概要
 - 学生の試験バージョン（A/B）割当定義

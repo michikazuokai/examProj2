@@ -76,6 +76,16 @@ class Command(BaseCommand):
         deleted, _ = Student.objects.all().delete()
         self.stdout.write(f"削除件数: {deleted}")
 
+        def parse_bool(v, default=True):
+            if v is None:
+                return default
+            v = str(v).strip().lower()
+            if v in ("1", "true", "t", "yes", "y"):
+                return True
+            if v in ("0", "false", "f", "no", "n"):
+                return False
+            return default
+
         # -------------------------
         # 作成（bulk_create）
         # -------------------------
@@ -91,7 +101,8 @@ class Command(BaseCommand):
                 nickname=r["nickname"],
                 gender=r["gender"],
                 COO=r["COO"],
-                enrolled=bool(int(r["enrolled"])) if r["enrolled"] is not None else True,
+                enrolled = parse_bool(r.get("enrolled"), default=True)
+                #enrolled=bool(int(r["enrolled"])) if r["enrolled"] is not None else True,
             ))
 
         Student.objects.bulk_create(students)
