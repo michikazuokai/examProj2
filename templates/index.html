@@ -1,0 +1,56 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>科目別 採点一覧</title>
+    <link rel="stylesheet" href="{% static 'css/index.css' %}">
+</head>
+
+<body>
+    <h1 id="pageTitle">科目選択</h1>
+
+    <p>
+        年度: <span id="current-year"></span>
+        ／ 期: <span id="current-term">2</span>
+    </p>
+
+    <!-- 科目選択 -->
+    <label for="subject-dropdown">科目を選択:</label>
+    <select id="subject-dropdown">
+        <option value="">科目を選択してください</option>
+    </select>
+
+    <hr>
+
+    <!-- 学生一覧テーブル -->
+    <div id="student-table-area">
+        <table id="students-table" style="width: 100%; border-collapse: collapse;">
+            <thead>
+                <tr>
+                    <th>No</th>
+                    <th>名前</th>
+                    <th>Ver</th>
+                    <th>点数</th>
+                    <th>補正</th>
+                    <th>adjust</th>
+                    <th>合計</th>
+                </tr>
+            </thead>
+
+            <tbody id="students-table-body">
+                <!-- ここに JS が行を挿入 -->
+            </tbody>
+        </table>
+    </div>
+
+    <hr>
+
+    <!-- CSV ボタン -->
+    <button id="download-csv">CSVダウンロード</button>
+
+    <!-- JS -->
+    <script src="{% static 'js/index_page.js' %}"></script>
+
+</body>
+</html>

@@ -1,0 +1,271 @@
+body {
+    font-family: Arial, sans-serif;
+    margin: 20px;
+}
+
+#container {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 20px;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    box-shadow: 0 0 10px rgba(0,0,0,0.1);
+
+    position: static !important;   /* ← これを追加！ */
+}
+
+h1 {
+    text-align: center;
+}
+
+#studentNo, #answerSheet, #scoreAndButtons {
+    margin-bottom: 20px;
+}
+
+.question-number {
+    font-weight: bold;
+}
+
+.question-number-input {
+    width: 50px;
+    padding: 5px;
+    margin-left: 10px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+}
+
+.answer-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.question-label {
+    width: 60px;
+    font-weight: bold;
+}
+
+/* または、answerSheetにマージンを追加 */
+#answerSheet {
+    margin-top: 10px; /* 上方向のマージンを追加してスペースを確保 */
+}
+.answer-box {
+    position: relative;
+    width: 30px;
+    height: 30px;
+    margin: 5px 0 0; /* 上に20pxのマージンを追加して、data-idと重ならないようにする */
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+}
+
+.data-id-span {
+    position: absolute;
+/*    top: -45%; /* boxの上に表示 */
+    top: -12px; /* boxの上に表示 */
+    font-size: 25%; /* Adjust based on the actual box height */
+    text-align: center;
+    width: 100%;
+}
+
+.answer-content {
+    font-size: 10px;       /* ✅ 小さめに設定 */
+    color: #333;
+    margin-top: 2px;
+    pointer-events: none;
+    line-height: 1;
+    white-space: pre-wrap;       /* ✅ 折り返しの要（これがないと折り返さない） */
+    word-break: break-word;      /* ✅ 長い単語を途中で折る */
+    overflow-wrap: break-word;   /* ✅ 一部ブラウザの補完 */
+    text-align: center;   /* プレーンテキスト用 */
+}
+
+.answer-content pre{
+    text-align: left;               /* ✅ 左寄せ */
+}
+
+.answer-content {
+    text-align: center;   /* プレーンテキスト用 */
+}
+.hosei-positive:not(.checked) {
+    background-color: lightpink !important;
+}
+
+.hosei {
+    background-color: #ffcccc;
+}
+
+.answer-box.checked {
+    background-color: #00ff00; /* チェックされた状態の背景色を設定 */
+    border: 2px solid #000;    /* チェックされた状態のボーダーを設定 */
+}
+
+.answer-box::before {
+/*    content: '✔'; /* チェックマークを表示 */
+    display: none;
+}
+
+.answer-box.checked::before {
+    display: block;
+}
+
+
+.row-score {
+    margin-left: auto;
+    font-weight: bold;
+}
+
+
+#totalScore {
+    font-weight: bold;
+    text-align: right;
+    margin-top: 20px;
+}
+
+button {
+    padding: 10px 20px;
+    margin: 10px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 16px;
+}
+
+button#nextButton {
+    background-color: #4caf50;
+    color: #fff;
+}
+
+button#submitButton {
+    background-color: #f44336;
+    color: #fff;
+}
+
+button:hover {
+    opacity: 0.9;
+}
+
+.button-container {
+    display: flex;
+    justify-content: center;  /* ✅ ボタン全体を中央揃え */
+    align-items: center;
+    gap: 120px;  /* ✅ `前へ`・`次へ` のグループと `終了` ボタンの間隔 */
+    margin-top: 10px;
+}
+
+.nav-buttons {
+    display: flex;
+    gap: 10px;  /* ✅ `前へ`・`次へ` ボタンの間隔 */
+}
+
+.button-container button {
+    padding: 8px 16px;
+    font-size: 16px;
+}
+
+/* カスタムメニューのスタイル */
+/* 右クリックメニュー */
+#context-menu {
+    position: fixed;   /* ← absolute ではなく fixed にする */
+    display: none;
+    background: white;
+    border: 1px solid #aaa;
+    z-index: 2000;
+    padding: 4px;
+    border-radius: 4px;
+}
+
+#context-menu .menu-item {
+    padding: 6px 10px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+#context-menu .menu-item:hover {
+    background-color: #eee;
+}
+
+/* セパレーターのスタイル */
+.separator {
+    border-top: 1px solid #ccc;
+    margin: 4px 0;
+    pointer-events: none;
+}
+
+/* サブメニューのスタイル */
+.submenu {
+    display: none;
+    position: absolute;
+    left: 100%; /* 追加: 親メニューの右側に表示 */
+    top: 0;
+    background-color: white;
+    border: 1px solid #ccc;
+    z-index: 1000;
+    padding: 10px;
+}
+
+.menu-item:hover .submenu {
+    display: block;
+}
+
+.submenu-item {
+    padding: 8px;
+    cursor: pointer;
+}
+
+.submenu-item:hover {
+    background-color: #ddd !important;
+}
+
+/* 非表示を設定するクラス */
+.hidden {
+    display: none !important; /* 重要度を設定して強制的に非表示にする */
+}
+
+/* ポップアップメニューのスタイル */
+.popup {
+    display: none;
+    position: absolute;
+    background-color: white;
+    border: 1px solid #ccc;
+    padding: 1px;
+    z-index: 1000;
+    white-space: pre-line;
+    line-height: 0.8;  /* 行間を調整して文字の間隔を狭くする */
+}
+
+.popup.active {
+    display: block;
+}
+
+
+/* q_no（問題番号） */
+.qno-label {
+    font-size: 10px;
+    text-align: center;
+    margin-bottom: 2px;
+    color: #555;
+}
+
+/* answer（正解） */
+.answer-text {
+    font-size: 12px;
+    font-weight: bold;
+    pointer-events: none;
+    color: #333;
+}
+
+/* キャンセルボタンは小さめに */
+#cancelButton.small-button {
+    padding: 4px 8px;
+    font-size: 10px;
+    border-radius: 4px;
+    background-color: #ddd;
+    border: 1px solid #aaa;
+}
+#cancelButton.small-button:hover {
+    background-color: #ccc;
+}

@@ -1,0 +1,46 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>得点調整</title>
+    <link rel="stylesheet" href="{% static 'css/examadjust.css' %}">
+</head>
+<body>
+    <h1 id="pageTitle">得点調整</h1>
+    <div id="message-box" style="margin-top: 10px; color: green;"></div>
+
+    <p>年度: <span id="exam-year"></span></p>
+    <p>試験名: <span id="exam-name"></span></p>
+
+    <h2>調整コメント</h2>
+    <textarea id="adjust-comment" rows="3" cols="60"></textarea>
+
+    <table>
+        <thead>
+            <colgroup>
+                <col class="col-stdNo">
+                <col class="col-name">
+                <col class="col-point">
+                <col class="col-adjust">
+                <col class="col-total">
+            </colgroup>
+            <tr>
+                <th class="header">No</th>
+                <th class="header">名前</th>
+                <th class="header">点数</th>
+                <th class="header">adjust</th>
+                <th class="header">合計</th>
+            </tr>
+        </thead>
+        <tbody id="student-table-body"></tbody>
+    </table>
+
+    <div class="button-container">
+        <button id="updateButton">更新</button>
+        <button id="backButton">戻る</button>
+    </div>
+
+    <script src="{% static 'js/examadjust_page.js' %}"></script>
+</body>
+</html>

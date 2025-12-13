@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+
+# Django
+db.sqlite3
+
+# OS / Editor
+.DS_Store
+.vscode/
+.idea/
+
+# 一時ファイル・コピー
+* copy.*
+student.csv

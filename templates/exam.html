@@ -1,0 +1,68 @@
+﻿{% load static %}
+
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>得点入力</title>
+
+    <!-- 旧デザインの styles2.css を使用 -->
+    <link rel="stylesheet" href="{% static 'css/styles2.css' %}">
+</head>
+
+<body>
+<div id="container">
+
+    <!-- 試験タイトル -->
+    <h1 id="examTitle"></h1>
+
+    <!-- 学生選択（任意だが以前と同じ UI を残す） -->
+    <label for="studentSelect">学生を選択してください:</label>
+    <select id="studentSelect">
+        <option value="">選択してください</option>
+    </select>
+
+    <!-- 学生情報（新JSで必須） -->
+    <div id="studentInfo" class="hidden">学生: -</div>
+
+    <!-- キャンセル状態（新JSで使用） -->
+    <div id="cancelStatus" class="hidden">キャンセル状態: なし</div>
+
+    <!-- 答案表示エリア -->
+    <div id="answerSheet"></div>
+
+    <!-- ★★★ 右クリックメニュー（JS 必須） ★★★ -->
+    <div id="context-menu"></div>
+    
+    <!-- ポップアップメニュー（右クリック用） -->
+    <div id="popup" class="popup"></div>
+
+    <!-- 合計点 -->
+    <div id="scoreAndButtons">
+        <div id="totalScore">合計得点: 0</div>
+
+        <!-- ボタン配置（旧デザイン保持） -->
+        <div class="button-container">
+            <div class="nav-buttons">
+                <button id="prevButton">前へ</button>
+                <button id="nextButton">次へ</button>
+            </div>
+
+            <button id="submitButton">終了</button>
+        </div>
+
+        <!-- 小さいキャンセルボタン（styles2.css に合わせた形） -->
+        <div style="text-align:right; margin-top:5px;">
+            <button id="cancelButton" class="small-button">キャンセル</button>
+        </div>
+    </div>
+
+</div>
+<!-- config.js（外部設定） -->
+<script src="{% static 'js/config.js' %}"></script>
+<!-- 新ロジック版 exam_page.js -->
+<script src="{% static 'js/exam_page.js' %}"></script>
+
+</body>
+</html>
