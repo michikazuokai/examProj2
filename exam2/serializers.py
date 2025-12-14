@@ -43,6 +43,7 @@ class ExamSerializer(serializers.ModelSerializer):
             # "target_year",
             "adjust_comment",
             "questions",
+            "problem_hash",
         ]
 
 

@@ -58,9 +58,17 @@ async function initExamPage() {
     questions = exam.questions || [];
 
     // console.log(questions);
-    
-    document.getElementById("examTitle").textContent =
-        `${exam.subjectNo} ${exam.title}（${exam.version}版）`;
+
+    // hash は先頭7文字だけ表示
+    const hashShort = exam.problem_hash
+        ? exam.problem_hash.slice(0, 7)
+        : "";
+    // タイトル生成
+    const titleElem = document.getElementById("examTitle");
+    titleElem.innerHTML = `
+        ${exam.title}　${exam.version}版
+        ${hashShort ? `<span class="exam-hash">[${hashShort}]</span>` : ""}
+    `;
 
     // ② 学生一覧
     students = await fetchJSON(`/api/exam-students/?exam_id=${examId}`);

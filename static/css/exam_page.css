@@ -241,3 +241,10 @@ button:hover {
 .hidden {
     display: none !important;
 }
+
+#examTitle .exam-hash {
+    font-size: 0.5em !important;
+    font-weight: normal !important;
+    color: #888;
+    margin-left: 0.6em;
+}

@@ -75,6 +75,20 @@ async function loadSubjects() {
     });
 }
 
+// ---------------- 試験情報（version / hash）表示 ----------------
+function renderExamInfo(exam) {
+    const info = document.getElementById("exam-info");
+    if (!info) return;
+
+    if (!exam || !exam.problem_hash) {
+        info.textContent = "";
+        return;
+    }
+
+    info.textContent = `[${exam.problem_hash.slice(0, 7)}]`;
+}
+
+
 // ---------------- 学生一覧の読み込み（A/B 混在版） ----------------
 async function loadStudentList(subjectNo) {
 
@@ -82,6 +96,9 @@ async function loadStudentList(subjectNo) {
         `/api/examadjust_subject/?subjectNo=${subjectNo}` +
         `&fsyear=${GLOBAL_FSYEAR}&term=${GLOBAL_TERM}`
     );
+
+    // ★ 追加：科目に対応する exam 情報を表示
+    renderExamInfo(data.exam);
 
     const tbody = document.getElementById("students-table-body");
     tbody.innerHTML = "";

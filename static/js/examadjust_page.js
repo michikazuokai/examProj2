@@ -18,9 +18,11 @@ async function initEnvironment() {
     const res = await fetch("/api/environment/");
     const data = await res.json();
 
-    const title = document.getElementById("pageTitle");
-    if (data.environment === "テスト") title.textContent += " (テスト)";
-    if (data.environment === "本番") title.textContent += " (本番)";
+    const envSpan = document.getElementById("exam-env");
+    if (!envSpan) return;
+
+    if (data.environment === "テスト") envSpan.textContent = " (テスト)";
+    if (data.environment === "本番") envSpan.textContent = " (本番)";
 }
 
 // ------------------------
@@ -54,6 +56,8 @@ async function initAdjustPage() {
         `/api/examadjust_subject/?subjectNo=${subjectNo}&fsyear=${fsyear}&term=${term}`
     );
 
+    renderExamInfo(data.exam);
+
     // 見出し表示
     document.getElementById("exam-year").textContent = fsyear;
     document.getElementById("exam-name").textContent = `${subjectNo}（${term}期）`;
@@ -68,6 +72,7 @@ async function initAdjustPage() {
     const cdata = await fetchJSON(
         `/api/examadjustcomment_subject/?subjectNo=${subjectNo}&fsyear=${fsyear}&term=${term}`
     );
+    console.log("examadjust_subject response:", data);
 
     document.getElementById("adjust-comment").value = cdata.adjust_comment || "";
     globalComment = cdata.adjust_comment || "";
@@ -97,6 +102,19 @@ async function fetchJSON(url, options = {}) {
     const res = await fetch(url, options);
     if (!res.ok) console.error("fetch error:", url, res.status);
     return await res.json();
+}
+
+// ---------------- 試験情報表示 ----------------
+function renderExamInfo(exam) {
+    const info = document.getElementById("exam-info");
+    if (!info) return;
+
+    if (!exam || !exam.problem_hash) {
+        info.textContent = "";
+        return;
+    }
+
+    info.textContent = `[${exam.problem_hash.slice(0, 7)}]`;
 }
 
 // ------------------------

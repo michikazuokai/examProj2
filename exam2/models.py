@@ -23,6 +23,15 @@ class Exam(models.Model):
     # 任意で調整コメントを保持（旧 adjust_comment）
     adjust_comment = models.TextField(blank=True)
 
+    # ★ 追加（安全）
+    problem_hash = models.CharField(
+        max_length=32,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="問題内容を一意に識別するハッシュ（answers_xxxx.json の metainfo.hash）"
+    )
+
     class Meta:
         unique_together = ("subject", "fsyear", "term", "version")
         ordering = ["subject__subjectNo", "fsyear", "term", "version"]

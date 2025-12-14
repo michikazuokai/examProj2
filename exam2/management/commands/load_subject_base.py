@@ -66,6 +66,7 @@ class Command(BaseCommand):
         subject_name = meta["title"]
         nenji = int(meta["nenji"])
         fsyear = meta["fsyear"]
+        problem_hash=meta["metainfo"]["hash"]
 
         # -----------------------------
         # Subject 作成 or 取得
@@ -94,15 +95,24 @@ class Command(BaseCommand):
         for v in versions:
             version = v["version"]
 
+    # JSON の metainfo から取得済みとする
+    # problem_hash = meta["hash"]
+
             exam, created = Exam.objects.get_or_create(
                 subject=subject,
                 fsyear=fsyear,
-                term=term,          # ← ★ settings.py から
+                term=term,
                 version=version,
                 defaults={
-                    "title": f"{subject.name} {version}版"
+                    "title": subject.name,
+                    "problem_hash": problem_hash,   # ★ 新規作成時のみ
                 }
             )
+
+            # ★ 既存 Exam に hash が無い場合のみ補完（安全）
+            if not created and not exam.problem_hash and problem_hash:
+                exam.problem_hash = problem_hash
+                exam.save(update_fields=["problem_hash"])
 
             if created:
                 self.stdout.write(

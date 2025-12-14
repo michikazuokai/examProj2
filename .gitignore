@@ -13,3 +13,8 @@ db.sqlite3
 # 一時ファイル・コピー
 * copy.*
 student.csv
+
+# --- exam score export/import ---
+data/export/
+*.scores.json
+examTFdata.json

@@ -15,11 +15,17 @@
         ／ 期: <span id="current-term">2</span>
     </p>
 
-    <!-- 科目選択 -->
-    <label for="subject-dropdown">科目を選択:</label>
-    <select id="subject-dropdown">
-        <option value="">科目を選択してください</option>
-    </select>
+    <!-- 科目選択 + 試験情報 -->
+    <div class="subject-select-row">
+        <label for="subject-dropdown">科目を選択:</label>
+
+        <select id="subject-dropdown">
+            <option value="">科目を選択してください</option>
+        </select>
+
+        <!-- ★ 追加：右側に表示 -->
+        <span id="exam-info"></span>
+    </div>
 
     <hr>
 

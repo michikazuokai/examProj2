@@ -497,10 +497,10 @@ class StudentsOfSubjectAPIView(APIView):
 
 class ExamAdjustSubjectAPIView(APIView):
     """
-    GET /api/examadjust_subject/?subjectNo=2030402&fsyear=2025&term=2
+    GET /api/examadjust_subject/?subjectNo=1010401&fsyear=2025&term=4
 
-    → その科目 / 年度 / 期 に属する学生を
-       A/B まとめて返す（version は表示用に含める）
+    → 科目 / 年度 / 期 に属する学生を A/B 混在で返す
+    → 併せて「代表 Exam（hash 表示用）」を返す
     """
 
     def get(self, request, *args, **kwargs):
@@ -519,12 +519,18 @@ class ExamAdjustSubjectAPIView(APIView):
 
         subject = get_object_or_404(Subject, subjectNo=subjectNo)
 
-        # ★ 学生と Exam(=A/B) の対応は StudentExamVersion に入っている想定
-        sev_qs = StudentExamVersion.objects.filter(
-            exam__subject=subject,
-            exam__fsyear=fsyear,
-            exam__term=term,
-        ).select_related("student", "exam").order_by("student__stdNo")
+        # -------------------------------------------------
+        # ★ 学生と Exam(A/B) の対応（StudentExamVersion）
+        # -------------------------------------------------
+        sev_qs = (
+            StudentExamVersion.objects.filter(
+                exam__subject=subject,
+                exam__fsyear=fsyear,
+                exam__term=term,
+            )
+            .select_related("student", "exam")
+            .order_by("student__stdNo")
+        )
 
         students_data = []
 
@@ -532,7 +538,9 @@ class ExamAdjustSubjectAPIView(APIView):
             stu = sev.student
             exam = sev.exam   # この exam が A or B
 
-            # 得点集計（points + hosei）
+            # -------------------------
+            # 得点集計（TF + hosei）
+            # -------------------------
             score_agg = StudentExam.objects.filter(
                 student=stu,
                 exam=exam,
@@ -544,12 +552,15 @@ class ExamAdjustSubjectAPIView(APIView):
                         output_field=IntegerField(),
                     )
                 ),
-                hosei=Sum("hosei")
+                hosei=Sum("hosei"),
             )
+
             score = score_agg["score"] or 0
             hosei = score_agg["hosei"] or 0
 
+            # -------------------------
             # adjust
+            # -------------------------
             adj = ExamAdjust.objects.filter(
                 student=stu,
                 exam=exam,
@@ -559,7 +570,7 @@ class ExamAdjustSubjectAPIView(APIView):
             students_data.append({
                 "stdNo": stu.stdNo,
                 "nickname": stu.nickname,
-                "version": exam.version,  # A / B
+                "version": exam.version,   # A / B
                 "exam_id": exam.id,
                 "score": score,
                 "hosei": hosei,
@@ -567,12 +578,32 @@ class ExamAdjustSubjectAPIView(APIView):
                 "total": score + hosei + adjust,
             })
 
+        # -------------------------------------------------
+        # ★ 代表 Exam（hash 表示用）
+        #   A/B どちらでも hash は同一という前提
+        # -------------------------------------------------
+        exam_obj = (
+            Exam.objects.filter(
+                subject=subject,
+                fsyear=fsyear,
+                term=term,
+            )
+            .order_by("version")
+            .first()
+        )
+
+        exam_data = ExamSerializer(exam_obj).data if exam_obj else None
+
+        # -------------------------------------------------
+        # Response
+        # -------------------------------------------------
         return Response(
             {
                 "subjectNo": subject.subjectNo,
                 "subject_name": subject.name,
                 "fsyear": fsyear,
                 "term": term,
+                "exam": exam_data,          # ★ hash はここ
                 "students": students_data,
             },
             status=status.HTTP_200_OK,

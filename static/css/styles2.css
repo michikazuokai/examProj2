@@ -269,3 +269,10 @@ button:hover {
 #cancelButton.small-button:hover {
     background-color: #ccc;
 }
+
+h1 .exam-hash {
+    font-size: 1.2rem;
+    font-weight: normal;
+    margin-left: 0.6em;
+    color: #888;
+}
