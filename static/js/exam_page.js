@@ -60,13 +60,15 @@ async function initExamPage() {
     // console.log(questions);
 
     // hash は先頭7文字だけ表示
-    const hashShort = exam.problem_hash
-        ? exam.problem_hash.slice(0, 7)
-        : "";
+    const hashShort = exam.problem_hash ? exam.problem_hash.slice(0, 7) : "";
+
+    // バージョン（A/B）を採点画面では表示する
+    const ver = exam.version ? `${exam.version}` : "";
+    
     // タイトル生成
     const titleElem = document.getElementById("examTitle");
     titleElem.innerHTML = `
-        ${exam.title}　${exam.version}版
+        ${exam.title} ${ver}
         ${hashShort ? `<span class="exam-hash">[${hashShort}]</span>` : ""}
     `;
 
@@ -625,10 +627,8 @@ function finishExam() {
     const params = new URLSearchParams(location.search);
     const subjectNo = params.get("subjectNo");
     const fsyear = params.get("fsyear");
-    const term = params.get("term");
-
     // すぐ戻る
-    location.href = `/?subjectNo=${subjectNo}&fsyear=${fsyear}&term=${term}`;
+    location.href = `/?subjectNo=${subjectNo}&fsyear=${fsyear}`;
 }
 
 // ----------------- DOMContentLoaded -----------------

@@ -27,7 +27,12 @@ class QuestionSerializer(serializers.ModelSerializer):
 
 
 class ExamSerializer(serializers.ModelSerializer):
-    subjectNo = serializers.CharField(source="subject.subjectNo", read_only=True)
+
+    # ★ Examに無いので subject から拾う
+    fsyear = serializers.IntegerField(source="subject.fsyear", read_only=True)
+    term   = serializers.IntegerField(source="subject.term", read_only=True)
+
+    # ★ questions をネストで返す（既存の想定どおり）
     questions = QuestionSerializer(many=True, read_only=True)
 
     class Meta:
@@ -35,15 +40,13 @@ class ExamSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "subject",
-            "subjectNo",
             "title",
+            "version",
+            "adjust_comment",
+            "problem_hash",
             "fsyear",
             "term",
-            "version",
-            # "target_year",
-            "adjust_comment",
             "questions",
-            "problem_hash",
         ]
 
 
@@ -65,13 +68,19 @@ class StudentExamSerializer(serializers.ModelSerializer):
             "hosei",
         ]
 
-
 class ExamAdjustSerializer(serializers.ModelSerializer):
+    stdNo = serializers.CharField(source="student.stdNo", read_only=True)
+
     class Meta:
         model = ExamAdjust
-        fields = [
-            "id",
-            "exam",
-            "stdNo",   # Student FK
-            "adjust",
-        ]
+        fields = ["id", "exam", "student", "stdNo", "adjust"]
+        
+# class ExamAdjustSerializer(serializers.ModelSerializer):
+#     class Meta:
+#         model = ExamAdjust
+#         fields = [
+#             "id",
+#             "exam",
+#             "stdNo",   # Student FK
+#             "adjust",
+#         ]

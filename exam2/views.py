@@ -1,6 +1,6 @@
 # exam2/views.py
 from django.conf import settings
-from django.db import models
+from django.db import models, transaction
 from django.db.models import Sum, Case, When, F, IntegerField
 from django.shortcuts import render, get_object_or_404
 from django.views import View
@@ -19,6 +19,7 @@ from .models import (
     ExamAdjust,
     StudentExamVersion,
 )
+
 from .serializers import (
     SubjectSerializer,
     ExamSerializer,
@@ -408,6 +409,11 @@ def studentexam_bulk_update(request):
 # （科目ベース）学生一覧：必要なら使う
 # =========================
 class StudentsOfSubjectAPIView(APIView):
+    """
+    GET /api/students_of_subject/?subjectNo=1010401&fsyear=2025
+    ※ term パラメータは不要（あっても無視）
+    """
+
     def get(self, request):
         subjectNo = request.GET.get("subjectNo")
         fsyear = request.GET.get("fsyear") or getattr(settings, "FSYEAR", None)
@@ -415,59 +421,85 @@ class StudentsOfSubjectAPIView(APIView):
         if not subjectNo or fsyear is None:
             return Response({"error": "subjectNo と fsyear が必要です"}, status=400)
 
-        subject = get_object_or_404(Subject, subjectNo=subjectNo, fsyear=int(fsyear))
-        term = subject.term  # ★ settings.TERM ではなく Subject.term
+        fsyear = int(fsyear)
+
+        # ★ Subject は (subjectNo, fsyear) で特定（termはSubject側）
+        subject = get_object_or_404(Subject, subjectNo=subjectNo, fsyear=fsyear)
 
         # 科目の指定学年
         target_nenji = subject.nenji
-        entyear = int(fsyear) - target_nenji + 1
 
+        # 対象学生の入学年度を計算
+        entyear = fsyear - target_nenji + 1
+
+        # 学年の学生一覧（必要なら enrolled=True など足せます）
         students = Student.objects.filter(entyear=entyear).order_by("stdNo")
+
         results = []
 
         for stu in students:
-            sev = StudentExamVersion.objects.filter(
-                student=stu,
-                exam__subject=subject,   # ★ここだけでOK（Examにfsyear/termは無い）
-            ).select_related("exam").first()
-
-            version = sev.exam.version if sev else "？"
-            exam_id = sev.exam.id if sev else None
-
-            # 得点（points方式に揃えるならこちら推奨）
-            if exam_id is None:
-                score = 0
-                hosei = 0
-            else:
-                agg = StudentExam.objects.filter(student=stu, exam_id=exam_id).aggregate(
-                    score=Sum(
-                        Case(
-                            When(TF=1, then=F("question__points")),
-                            default=0,
-                            output_field=IntegerField(),
-                        )
-                    ),
-                    hosei=Sum("hosei"),
+            # ★ version と exam_id を学生ごとに取得（exam__fsyear/term はもう無い）
+            sev = (
+                StudentExamVersion.objects.filter(
+                    student=stu,
+                    exam__subject=subject,
                 )
-                score = agg["score"] or 0
-                hosei = agg["hosei"] or 0
+                .select_related("exam")
+                .order_by("exam__version")  # ★ A→B
+                .first()
+            )
 
-            adj = ExamAdjust.objects.filter(student=stu, exam_id=exam_id).first() if exam_id else None
+            if not sev:
+                results.append({
+                    "stdNo": stu.stdNo,
+                    "nickname": stu.nickname,
+                    "version": "？",
+                    "exam_id": None,
+                    "score": 0,
+                    "hosei": 0,
+                    "adjust": 0,
+                    "total": 0,
+                })
+                continue
+
+            exam = sev.exam
+
+            # 得点集計（points + hosei）
+            agg = StudentExam.objects.filter(student=stu, exam=exam).aggregate(
+                score=Sum(
+                    Case(
+                        When(TF=1, then=F("question__points")),
+                        default=0,
+                        output_field=IntegerField(),
+                    )
+                ),
+                hosei=Sum("hosei"),
+            )
+            score = agg["score"] or 0
+            hosei = agg["hosei"] or 0
+
+            # adjust（無ければ 0）
+            adj = ExamAdjust.objects.filter(student=stu, exam=exam).first()
             adjust_value = adj.adjust if adj else 0
 
             results.append({
                 "stdNo": stu.stdNo,
                 "nickname": stu.nickname,
-                "version": version,
-                "exam_id": exam_id,
+                "version": exam.version,
+                "exam_id": exam.id,
                 "score": score,
                 "hosei": hosei,
                 "adjust": adjust_value,
                 "total": score + hosei + adjust_value,
-                "term": term,  # 表示に使いたければ返す（不要なら消してOK）
             })
 
-        return Response({"students": results}, status=200)
+        return Response({
+            "subjectNo": subject.subjectNo,
+            "subject_name": subject.name,
+            "fsyear": subject.fsyear,
+            "term": subject.term,   # 表示用
+            "students": results,
+        }, status=200)
 
 
 # =========================
@@ -617,42 +649,67 @@ class ExamAdjustUpdateSubjectAPIView(APIView):
     }
     term は不要（来ても無視してOK）
     """
+
     def post(self, request, *args, **kwargs):
         subjectNo = request.data.get("subjectNo")
         fsyear = request.data.get("fsyear") or getattr(settings, "FSYEAR", None)
         items = request.data.get("items", [])
 
         if not subjectNo or fsyear is None:
-            return Response({"error": "subjectNo と fsyear が必要です"}, status=400)
+            return Response(
+                {"error": "subjectNo と fsyear が必要です"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if not isinstance(items, list):
+            return Response(
+                {"error": "items は配列で送ってください"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         subject = get_object_or_404(Subject, subjectNo=subjectNo, fsyear=int(fsyear))
 
-        for item in items:
-            exam_id = item.get("exam_id")
-            stdNo = item.get("stdNo")
-            adjust = item.get("adjust", 0)
+        with transaction.atomic():
+            for item in items:
+                exam_id = item.get("exam_id")
+                stdNo = item.get("stdNo")
+                adjust_raw = item.get("adjust", 0)
 
-            if not exam_id or not stdNo:
-                continue
+                if not exam_id or not stdNo:
+                    continue
 
-            exam = get_object_or_404(Exam, pk=exam_id)
+                # adjust を安全に int 化（失敗したら 0）
+                try:
+                    adjust = int(adjust_raw)
+                except (TypeError, ValueError):
+                    adjust = 0
 
-            # safety：別科目の exam が混ざったら弾く
-            if exam.subject_id != subject.id:
-                return Response(
-                    {"error": f"exam_id={exam_id} は subjectNo={subjectNo}({fsyear}) に属しません"},
-                    status=400
+                # UIが min=0 ならサーバも合わせる（必要なら外してください）
+                if adjust < 0:
+                    adjust = 0
+
+                exam = get_object_or_404(Exam, pk=exam_id)
+
+                # safety：別科目の exam が混ざったら弾く
+                if exam.subject_id != subject.id:
+                    return Response(
+                        {
+                            "error": f"exam_id={exam_id} は subjectNo={subjectNo}({fsyear}) に属しません",
+                            "stdNo": stdNo,
+                        },
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+                student = get_object_or_404(Student, stdNo=stdNo)
+
+                obj, created = ExamAdjust.objects.get_or_create(
+                    exam=exam,
+                    student=student,
+                    defaults={"adjust": adjust},
                 )
+                if not created:
+                    if obj.adjust != adjust:  # 無駄なUPDATE削減（任意）
+                        obj.adjust = adjust
+                        obj.save(update_fields=["adjust"])
 
-            student = get_object_or_404(Student, stdNo=stdNo)
-
-            obj, created = ExamAdjust.objects.get_or_create(
-                exam=exam,
-                student=student,
-                defaults={"adjust": int(adjust)},
-            )
-            if not created:
-                obj.adjust = int(adjust)
-                obj.save(update_fields=["adjust"])
-
-        return Response({"status": "ok"}, status=200)
+        return Response({"status": "ok"}, status=status.HTTP_200_OK)

@@ -33,7 +33,6 @@ function getParams() {
     return {
         subjectNo: p.get("subjectNo"),
         fsyear: p.get("fsyear"),
-        term: p.get("term"),
     };
 }
 
@@ -44,8 +43,8 @@ async function initAdjustPage() {
 
     const { subjectNo, fsyear, term } = getParams();
 
-    if (!subjectNo || !fsyear || !term) {
-        alert("subjectNo / fsyear / term がありません");
+    if (!subjectNo || !fsyear) {
+        alert("subjectNo / fsyear がありません");
         return;
     }
 
@@ -53,14 +52,18 @@ async function initAdjustPage() {
     // ★ 科目全体の A/B 学生一覧
     // -------------------------
     const data = await fetchJSON(
-        `/api/examadjust_subject/?subjectNo=${subjectNo}&fsyear=${fsyear}&term=${term}`
+        `/api/examadjust_subject/?subjectNo=${subjectNo}&fsyear=${fsyear}`
     );
 
     renderExamInfo(data.exams);
 
     // 見出し表示
     document.getElementById("exam-year").textContent = fsyear;
-    document.getElementById("exam-name").textContent = `${subjectNo}（${term}期）`;
+
+    // term は URL からではなく API の data.term（= Subject.term）を優先
+    const displayTerm = data.term ?? term ?? "";
+    document.getElementById("exam-name").textContent =
+        displayTerm ? `${subjectNo}（${displayTerm}期）` : `${subjectNo}`;
 
     // local 状態構築
     students = data.students.map(stu => ({
@@ -70,8 +73,7 @@ async function initAdjustPage() {
 
     // コメント読み込み
     const cdata = await fetchJSON(
-        `/api/examadjustcomment_subject/?subjectNo=${subjectNo}&fsyear=${fsyear}&term=${term}`
-    );
+        `/api/examadjustcomment_subject/?subjectNo=${subjectNo}&fsyear=${fsyear}`);
     console.log("examadjust_subject response:", data);
 
     document.getElementById("adjust-comment").value = cdata.adjust_comment || "";
@@ -88,10 +90,7 @@ async function initAdjustPage() {
 
     // ★ 一覧に戻る（URL パラメータつき）
     document.getElementById("backButton").addEventListener("click", () => {
-        const url =
-            `/?subjectNo=${subjectNo}` +
-            `&fsyear=${fsyear}` +
-            `&term=${term}`;
+        const url =`/?subjectNo=${subjectNo}&fsyear=${fsyear}`;
         console.log("戻る:", url);
         location.href = url;
     });
@@ -197,6 +196,15 @@ async function updateAdjustments(subjectNo, fsyear, term) {
     // 変更されたものだけ送る
     const changed = students.filter(stu => stu.adjust !== stu.originalAdjust);
 
+    // ★ 送信用に整形（stdNo, exam_id, adjust だけ）
+    const payloadItems = changed.map(stu => ({
+        stdNo: stu.stdNo,
+        exam_id: stu.exam_id,   // ★ ここが undefined になってないか要確認
+        adjust: stu.adjust,
+    }));
+
+    console.log("payloadItems=", payloadItems); // ★ Networkを見る前にここでも確認
+
     // -------- Adjust 更新 --------
     if (changed.length > 0) {
         await fetch("/api/exam-adjust-update-subject/", {
@@ -205,7 +213,6 @@ async function updateAdjustments(subjectNo, fsyear, term) {
             body: JSON.stringify({
                 subjectNo,
                 fsyear,
-                term,
                 items: changed
             })
         });
@@ -215,7 +222,7 @@ async function updateAdjustments(subjectNo, fsyear, term) {
     const newComment = document.getElementById("adjust-comment").value;
     if (newComment !== globalComment) {
         await fetch(
-            `/api/examadjustcomment_subject/?subjectNo=${subjectNo}&fsyear=${fsyear}&term=${term}`,
+            `/api/examadjustcomment_subject/?subjectNo=${subjectNo}&fsyear=${fsyear}`,
             {
                 method: "PUT",
                 headers: {"Content-Type": "application/json"},

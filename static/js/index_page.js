@@ -130,10 +130,16 @@ function renderExamInfo(exams) {
 async function loadStudentList(subjectNo) {
 
     const data = await fetchJSON(
-        `/api/examadjust_subject/?subjectNo=${subjectNo}` +
-        `&fsyear=${GLOBAL_FSYEAR}&term=${GLOBAL_TERM}`
+        `/api/examadjust_subject/?subjectNo=${subjectNo}&fsyear=${GLOBAL_FSYEAR}`
     );
 
+
+    // 返ってきた term を表示に反映（settings.TERM依存を薄める）
+    if (data.term != null) {
+        GLOBAL_TERM = data.term;
+        document.getElementById("current-term").textContent = data.term;
+    }
+        
     // ★ 追加：科目に対応する exam 情報を表示
     renderExamInfo(data.exams);
 
@@ -157,23 +163,14 @@ async function loadStudentList(subjectNo) {
 
             if (ev.shiftKey) {
                 // 調整画面へ
-                const url =
-                    `/examadjust/?subjectNo=${subjectNo}` +
-                    `&fsyear=${GLOBAL_FSYEAR}` +
-                    `&term=${GLOBAL_TERM}`;
+                const url = `/examadjust/?subjectNo=${subjectNo}&fsyear=${GLOBAL_FSYEAR}`;
                 console.log("Shift + dblclick → Adjust:", url);
                 location.href = url;
                 return;
             }
 
             // 採点画面へ
-            const url =
-                `/exam/?exam_id=${stu.exam_id}` +
-                `&stdNo=${stu.stdNo}` +
-                `&subjectNo=${subjectNo}` +
-                `&fsyear=${GLOBAL_FSYEAR}` +
-                `&term=${GLOBAL_TERM}`;
-
+            const url = `/exam/?exam_id=${stu.exam_id}&stdNo=${stu.stdNo}&subjectNo=${subjectNo}&fsyear=${GLOBAL_FSYEAR}`;
             console.log("dblclick → Grading:", url);
             location.href = url;
         });
@@ -188,9 +185,7 @@ function setupEvents() {
         const subjectNo = ev.target.value;
         if (!subjectNo) return;
 
-        const newUrl = `/?subjectNo=${subjectNo}` +
-                       `&fsyear=${GLOBAL_FSYEAR}` +
-                       `&term=${GLOBAL_TERM}`;
+        const newUrl = `/?subjectNo=${subjectNo}&fsyear=${GLOBAL_FSYEAR}`;
         history.pushState({}, "", newUrl);
 
         loadStudentList(subjectNo);
