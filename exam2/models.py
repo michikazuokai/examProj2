@@ -3,38 +3,44 @@ from django.db import models
 
 
 class Subject(models.Model):
-    subjectNo = models.CharField(max_length=20, unique=True)  # 科目コード
-    name = models.CharField(max_length=100)                   # 科目名例：情報処理Ⅰ
-    nenji = models.IntegerField(default=1)               # 何年生が受講するかの年次
+    subjectNo = models.CharField(max_length=20)  # ★ uniqueを外す
+    fsyear = models.IntegerField(null=False)               # ★ 追加
+    term = models.IntegerField(null=False)                 # ★ 追加（その年度内で変わらない前提）
+    # fsyear = models.IntegerField(null=True, blank=True)
+    # term   = models.IntegerField(null=True, blank=True)
+    name = models.CharField(max_length=100)
+    nenji = models.IntegerField(default=1)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["subjectNo", "fsyear"], name="uq_subject_subjectNo_fsyear"),
+        ]
+        indexes = [
+            models.Index(fields=["subjectNo", "fsyear"]),
+        ]
 
     def __str__(self):
-        return f"{self.subjectNo} {self.name}"
+        return f"{self.subjectNo} {self.name} ({self.fsyear}年度 {self.term}期)"
 
 
 class Exam(models.Model):
-    subject = models.ForeignKey(Subject, on_delete=models.CASCADE, default=1)
-    title = models.CharField(max_length=100)          # 例：情報処理Ⅰ（1期 A版）
+    subject = models.ForeignKey(Subject, on_delete=models.CASCADE)
+    title = models.CharField(max_length=100)
+    version = models.CharField(max_length=5)   # A/B/C
 
-    # 試験情報
-    fsyear = models.CharField(max_length=4)           # 年度
-    term = models.IntegerField()                      # 学期（1期〜n期）
-    version = models.CharField(max_length=5)          # A/B/C
-
-    # 任意で調整コメントを保持（旧 adjust_comment）
     adjust_comment = models.TextField(blank=True)
 
-    # ★ 追加（安全）
     problem_hash = models.CharField(
-        max_length=32,
-        null=True,
-        blank=True,
-        db_index=True,
+        max_length=32, null=True, blank=True, db_index=True,
         help_text="問題内容を一意に識別するハッシュ（answers_xxxx.json の metainfo.hash）"
     )
 
     class Meta:
-        unique_together = ("subject", "fsyear", "term", "version")
-        ordering = ["subject__subjectNo", "fsyear", "term", "version"]
+        # subject が年度込みになるので、これでOK
+        constraints = [
+            models.UniqueConstraint(fields=["subject", "version"], name="uq_exam_subject_version"),
+        ]
+        ordering = ["subject__subjectNo", "subject__fsyear", "subject__term", "version"]
 
     def __str__(self):
         return f"{self.subject.subjectNo}-{self.version} {self.title}"

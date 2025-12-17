@@ -79,7 +79,8 @@ DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
 ###        'NAME': BASE_DIR / 'db.sqlite3',  ##<---本番用DB
-        "NAME": BASE_DIR / "db_dev.sqlite3",  ##<--開発用（fix)
+###        "NAME": BASE_DIR / "db_dev.sqlite3",  ##<--開発用（fix)
+        "NAME": BASE_DIR / "db_migtest.sqlite3"
     }
 }
 

@@ -27,7 +27,6 @@ from .serializers import (
     ExamAdjustSerializer,
 )
 
-
 # =========================
 # HTML ページ用 View
 # =========================
@@ -52,12 +51,9 @@ class ExamPageView(View):
     def get(self, request, *args, **kwargs):
         return render(request, "exam.html")
 
-
 # =========================
 # 環境情報
 # =========================
-
-
 
 class EnvironmentAPIView(APIView):
     def get(self, request, *args, **kwargs):
@@ -70,44 +66,61 @@ class EnvironmentAPIView(APIView):
 # =========================
 # 試験一覧（index 用）
 # =========================
-
 class SubjectListAPIView(APIView):
     """
-    GET /api/subjects/
-    → 科目一覧（subjectNo, name, nenji を返す）
+    GET /api/subjects/?fsyear=2025
+    → 科目一覧（subjectNo, name, nenji, term を返す）
+    ※ 新構造：Subject に fsyear/term がある
     """
 
+
     def get(self, request, *args, **kwargs):
-        subjects = Subject.objects.all().order_by("subjectNo")
+        fsyear = request.GET.get("fsyear") or getattr(settings, "FSYEAR", None)
+        if fsyear is None:
+            return Response({"error": "fsyear が未指定です"}, status=400)
+
+        fsyear = int(fsyear)
+
+        subjects = Subject.objects.filter(fsyear=fsyear).order_by("subjectNo")
 
         data = [
             {
                 "subjectNo": s.subjectNo,
                 "name": s.name,
-                "nenji": s.nenji
+                "nenji": s.nenji,
+                "fsyear": s.fsyear,
+                "term": s.term,
             }
             for s in subjects
         ]
-
-        return Response(data, status=200)
+        return Response(data, status=status.HTTP_200_OK)
 
 
 class ExamsOfSubjectAPIView(APIView):
+    """
+    GET /api/exams_of_subject/?subjectNo=1010401&fsyear=2025
+    """
     def get(self, request):
         subjectNo = request.GET.get("subjectNo")
-        fsyear = request.GET.get("fsyear")
-        term = request.GET.get("term")
+        fsyear = request.GET.get("fsyear") or getattr(settings, "FSYEAR", None)
 
-        subject = Subject.objects.get(subjectNo=subjectNo)
+        if not subjectNo or fsyear is None:
+            return Response({"error": "subjectNo と fsyear が必要です"}, status=400)
 
-        exams = Exam.objects.filter(subject=subject, fsyear=fsyear, term=term)
+        subject = get_object_or_404(Subject, subjectNo=subjectNo, fsyear=int(fsyear))
+
+        exams = Exam.objects.filter(subject=subject).order_by("version")
 
         data = [
-            {"id": e.id, "version": e.version, "title": e.title}
+            {
+                "id": e.id,
+                "version": e.version,
+                "title": e.title,
+                "problem_hash": e.problem_hash,
+            }
             for e in exams
         ]
-
-        return Response(data)
+        return Response(data, status=200)
 
 class StudentsOfExamAPIView(APIView):
     def get(self, request):
@@ -497,37 +510,35 @@ class StudentsOfSubjectAPIView(APIView):
 
 class ExamAdjustSubjectAPIView(APIView):
     """
-    GET /api/examadjust_subject/?subjectNo=1010401&fsyear=2025&term=4
-
-    → 科目 / 年度 / 期 に属する学生を A/B 混在で返す
-    → 併せて「代表 Exam（hash 表示用）」を返す
+    GET /api/examadjust_subject/?subjectNo=1010401&fsyear=2025
+    （term は不要。Subject.term を使う）
     """
-
     def get(self, request, *args, **kwargs):
         subjectNo = request.GET.get("subjectNo")
-        fsyear = request.GET.get("fsyear")
-        term = request.GET.get("term")
+        fsyear = request.GET.get("fsyear") or getattr(settings, "FSYEAR", None)
 
-        if not (subjectNo and fsyear and term):
+        if not subjectNo or fsyear is None:
             return Response(
-                {"error": "subjectNo, fsyear, term を指定してください"},
+                {"error": "subjectNo と fsyear を指定してください"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        fsyear = int(fsyear)
-        term = int(term)
+        subject = get_object_or_404(Subject, subjectNo=subjectNo, fsyear=int(fsyear))
 
-        subject = get_object_or_404(Subject, subjectNo=subjectNo)
+        # 科目内のA/B exams（hash表示用）
+        exams = list(Exam.objects.filter(subject=subject).order_by("version"))
+        exams_info = {
+            e.version: {
+                "id": e.id,
+                "title": e.title,
+                "problem_hash": e.problem_hash,
+            }
+            for e in exams
+        }
 
-        # -------------------------------------------------
-        # ★ 学生と Exam(A/B) の対応（StudentExamVersion）
-        # -------------------------------------------------
+        # 学生→受験Exam(A/B) の対応
         sev_qs = (
-            StudentExamVersion.objects.filter(
-                exam__subject=subject,
-                exam__fsyear=fsyear,
-                exam__term=term,
-            )
+            StudentExamVersion.objects.filter(exam__subject=subject)
             .select_related("student", "exam")
             .order_by("student__stdNo")
         )
@@ -536,11 +547,9 @@ class ExamAdjustSubjectAPIView(APIView):
 
         for sev in sev_qs:
             stu = sev.student
-            exam = sev.exam   # この exam が A or B
+            exam = sev.exam  # A or B
 
-            # -------------------------
-            # 得点集計（TF + hosei）
-            # -------------------------
+            # 得点集計（points + hosei）
             score_agg = StudentExam.objects.filter(
                 student=stu,
                 exam=exam,
@@ -558,109 +567,74 @@ class ExamAdjustSubjectAPIView(APIView):
             score = score_agg["score"] or 0
             hosei = score_agg["hosei"] or 0
 
-            # -------------------------
             # adjust
-            # -------------------------
-            adj = ExamAdjust.objects.filter(
-                student=stu,
-                exam=exam,
-            ).first()
+            adj = ExamAdjust.objects.filter(student=stu, exam=exam).first()
             adjust = adj.adjust if adj else 0
 
-            students_data.append({
-                "stdNo": stu.stdNo,
-                "nickname": stu.nickname,
-                "version": exam.version,   # A / B
-                "exam_id": exam.id,
-                "score": score,
-                "hosei": hosei,
-                "adjust": adjust,
-                "total": score + hosei + adjust,
-            })
-
-        # -------------------------------------------------
-        # ★ 代表 Exam（hash 表示用）
-        #   A/B どちらでも hash は同一という前提
-        # -------------------------------------------------
-        exam_obj = (
-            Exam.objects.filter(
-                subject=subject,
-                fsyear=fsyear,
-                term=term,
+            students_data.append(
+                {
+                    "stdNo": stu.stdNo,
+                    "nickname": stu.nickname,
+                    "version": exam.version,
+                    "exam_id": exam.id,
+                    "score": score,
+                    "hosei": hosei,
+                    "adjust": adjust,
+                    "total": score + hosei + adjust,
+                }
             )
-            .order_by("version")
-            .first()
-        )
 
-        exam_data = ExamSerializer(exam_obj).data if exam_obj else None
-
-        # -------------------------------------------------
-        # Response
-        # -------------------------------------------------
         return Response(
             {
                 "subjectNo": subject.subjectNo,
                 "subject_name": subject.name,
-                "fsyear": fsyear,
-                "term": term,
-                "exam": exam_data,          # ★ hash はここ
+                "fsyear": subject.fsyear,
+                "term": subject.term,          # ★ Subject.term を返す（今後 settings.TERM 不要へ）
+                "exams": exams_info,           # ★ 版ごとの hash が必要なら使える
                 "students": students_data,
             },
             status=status.HTTP_200_OK,
-        )
+        )    
 
 class ExamAdjustCommentSubjectAPIView(APIView):
     """
-    科目全体の adjust コメントを取得・更新する API
-    GET /api/examadjustcomment_subject/?subjectNo=XXX&fsyear=YYY&term=Z
-    PUT /api/examadjustcomment_subject/?subjectNo=XXX&fsyear=YYY&term=Z
+    GET/PUT
+    /api/examadjustcomment_subject/?subjectNo=XXX&fsyear=YYY
+    term は Subject.term を使う（パラメータ不要）
     """
 
     def get(self, request, *args, **kwargs):
         subjectNo = request.GET.get("subjectNo")
-        fsyear = request.GET.get("fsyear")
-        term = request.GET.get("term")
+        fsyear = request.GET.get("fsyear") or getattr(settings, "FSYEAR", None)
 
-        if not (subjectNo and fsyear and term):
-            return Response({"error": "subjectNo, fsyear, term が必要です"}, status=400)
+        if not subjectNo or fsyear is None:
+            return Response({"error": "subjectNo と fsyear が必要です"}, status=400)
 
-        exam = (
-            Exam.objects.filter(
-                subject__subjectNo=subjectNo,
-                fsyear=fsyear,
-                term=term
-            )
-            .order_by("version")
-            .first()
-        )
+        subject = get_object_or_404(Subject, subjectNo=subjectNo, fsyear=int(fsyear))
 
+        exam = Exam.objects.filter(subject=subject).order_by("version").first()
         if not exam:
-            return Response({"adjust_comment": ""})
+            return Response({"adjust_comment": ""}, status=200)
 
-        return Response({"adjust_comment": exam.adjust_comment or ""})
-
+        return Response({"adjust_comment": exam.adjust_comment or ""}, status=200)
 
     def put(self, request, *args, **kwargs):
         subjectNo = request.GET.get("subjectNo")
-        fsyear = request.GET.get("fsyear")
-        term = request.GET.get("term")
+        fsyear = request.GET.get("fsyear") or getattr(settings, "FSYEAR", None)
 
-        if not (subjectNo and fsyear and term):
-            return Response({"error": "subjectNo, fsyear, term が必要です"}, status=400)
+        if not subjectNo or fsyear is None:
+            return Response({"error": "subjectNo と fsyear が必要です"}, status=400)
 
-        exams = Exam.objects.filter(
-            subject__subjectNo=subjectNo,
-            fsyear=fsyear,
-            term=term
-        )
+        subject = get_object_or_404(Subject, subjectNo=subjectNo, fsyear=int(fsyear))
 
         comment = request.data.get("adjust_comment", "")
 
-        for exam in exams:
-            exam.adjust_comment = comment
-            exam.save(update_fields=["adjust_comment"])
+        exams = Exam.objects.filter(subject=subject)
+        for e in exams:
+            e.adjust_comment = comment
+            e.save(update_fields=["adjust_comment"])
 
-        return Response({"status": "ok", "adjust_comment": comment})
+        return Response({"status": "ok", "adjust_comment": comment}, status=200)
 
 class ExamAdjustUpdateSubjectAPIView(APIView):
     """
