@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from datetime import datetime, timezone
+from django.utils import timezone
 
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
@@ -41,13 +41,13 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         subjectNo = options["subjectNo"]
         fsyear = options["fsyear"]
-        term = options["term"]
+        term_opt = options["term"]
         fill_missing = options["fill_missing"]
 
-        if fsyear is None or term is None:
-            raise CommandError(
-                "fsyear/term が未指定です。--fsyear/--term を指定するか settings.FSYEAR/settings.TERM を設定してください。"
-            )
+        if fsyear is None:
+            raise CommandError("fsyear が未指定です。--fsyear を指定するか settings.FSYEAR を設定してください。")
+
+        fsyear = int(fsyear)
 
         # -------------------------
         # 出力先ファイル
@@ -57,20 +57,27 @@ class Command(BaseCommand):
         out_path = out_dir / "examTFdata.json"
 
         # -------------------------
-        # Subject / Exams 取得
+        # Subject を年度込みで確定（term は Subject 側）
         # -------------------------
         try:
-            subject = Subject.objects.get(subjectNo=subjectNo)
+            subject = Subject.objects.get(subjectNo=subjectNo, fsyear=fsyear)
         except Subject.DoesNotExist:
-            raise CommandError(f"Subject not found: subjectNo={subjectNo}")
+            raise CommandError(f"Subject not found: subjectNo={subjectNo} fsyear={fsyear}")
 
-        exams = list(
-            Exam.objects.filter(subject=subject, fsyear=fsyear, term=term).order_by("version")
-        )
-        if not exams:
+        # term は Subject.term を採用（オプションで検証だけする）
+        term = subject.term
+        if term_opt is not None and int(term_opt) != int(term):
             raise CommandError(
-                f"Exam not found for subjectNo={subjectNo}, fsyear={fsyear}, term={term}"
+                f"term mismatch: option term={term_opt} but Subject.term={term} "
+                f"(subjectNo={subjectNo} fsyear={fsyear})"
             )
+
+        # -------------------------
+        # Exams 取得（subject だけでOK）
+        # -------------------------
+        exams = list(Exam.objects.filter(subject=subject).order_by("version"))
+        if not exams:
+            raise CommandError(f"Exam not found for subjectNo={subjectNo}, fsyear={fsyear}")
 
         exam_by_version = {e.version: e for e in exams}
 
@@ -111,11 +118,7 @@ class Command(BaseCommand):
         # StudentExamVersion から「学生→その学生のexam(version)」を確定
         # -------------------------
         sev_qs = (
-            StudentExamVersion.objects.filter(
-                exam__subject=subject,
-                exam__fsyear=fsyear,
-                exam__term=term,
-            )
+            StudentExamVersion.objects.filter(exam__subject=subject)
             .select_related("student", "exam")
             .order_by("student__stdNo")
         )
@@ -189,8 +192,8 @@ class Command(BaseCommand):
         subject_block = {
             "subjectNo": subject.subjectNo,
             "subject_name": subject.name,
-            "fsyear": int(fsyear),
-            "term": int(term),
+            "fsyear": int(subject.fsyear),
+            "term": int(subject.term or 0),
             "exams": exams_json,          # version -> {hash, question_order, ...}
             "students": students_json,    # stdNo -> {version, answers[], adjust}
         }
@@ -208,7 +211,7 @@ class Command(BaseCommand):
             root = {}
 
         root.setdefault("meta", {})
-        root["meta"]["exported_at"] = datetime.now(timezone.utc).isoformat()
+        root["meta"]["exported_at"] = timezone.localtime().isoformat()
         root["meta"]["tool_version"] = "examProj2-phase2-array"
         root.setdefault("subjects", {})
 

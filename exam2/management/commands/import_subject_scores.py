@@ -6,334 +6,221 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
 from exam2.models import (
-    Subject,
-    Exam,
-    Question,
-    Student,
-    StudentExamVersion,
-    StudentExam,
-    ExamAdjust,
+    Subject, Exam, Question, Student,
+    StudentExamVersion, StudentExam, ExamAdjust
 )
 
 
 class Command(BaseCommand):
-    help = (
-        "Import subject scoring data from exam2/data/export/examTFdata.json\n"
-        "- Strict: abort if Exam.problem_hash mismatch\n"
-        "- Strict: abort if question_order mismatch (DB vs JSON)\n"
-        "- Apply TF/hosei by array index order (NOT by q_no)\n"
-        "- Optional: import only specific students by --stdno"
-    )
+    help = "Import subject scoring data (TF/hosei array + adjust) from exam2/data/export/examTFdata.json"
 
     def add_arguments(self, parser):
-        parser.add_argument("subjectNo", type=str, help="Subject number (e.g. 1010401)")
-        parser.add_argument(
-            "--stdno",
-            action="append",
-            default=[],
-            help="Import only this student stdNo. Can be repeated. Comma-separated also OK. e.g. --stdno 25367001 --stdno 25367002,25367003",
-        )
-        parser.add_argument(
-            "--yes",
-            action="store_true",
-            help="Do not prompt. Apply changes immediately after validation.",
-        )
-        parser.add_argument(
-            "--dry-run",
-            action="store_true",
-            help="Validate and show what would be updated, but do not write DB.",
-        )
+        parser.add_argument("subjectNo", type=str)
+        parser.add_argument("--fsyear", type=int, default=getattr(settings, "FSYEAR", None))
+        parser.add_argument("--json", type=str, default=None, help="Path to examTFdata.json (default: exam2/data/export/examTFdata.json)")
 
-    # ----------------------------
-    # Helpers
-    # ----------------------------
-    def _load_json(self, path: Path) -> dict:
-        if not path.exists():
-            raise CommandError(f"JSON file not found: {path}")
+        # 安全系
+        parser.add_argument("--dry-run", action="store_true", help="Validate only (no DB write).")
+        parser.add_argument("--force-hash", action="store_true", help="Ignore problem_hash mismatch and continue.")
+        parser.add_argument("--force-order", action="store_true", help="Ignore question_order mismatch and continue.")
+        parser.add_argument("--fill-missing", action="store_true", help="Create missing StudentExam rows if not exist.")
+        parser.add_argument("--skip-adjust", action="store_true", help="Do not import ExamAdjust.adjust.")
+
+        # term は Subject.term を正とし、オプションで不一致検出だけ
+        parser.add_argument("--term", type=int, default=None, help="Optional check: if given, must match Subject.term")
+
+    def handle(self, *args, **opts):
+        subjectNo = opts["subjectNo"]
+        fsyear = opts["fsyear"]
+        if fsyear is None:
+            raise CommandError("fsyear が未指定です。--fsyear を指定するか settings.FSYEAR を設定してください。")
+        fsyear = int(fsyear)
+
+        # ---- JSON 読み込み ----
+        if opts["json"]:
+            json_path = Path(opts["json"])
+        else:
+            json_path = Path(settings.BASE_DIR) / "exam2" / "data" / "export" / "examTFdata.json"
+
+        if not json_path.exists():
+            raise CommandError(f"JSON not found: {json_path}")
+
+        with json_path.open("r", encoding="utf-8") as f:
+            root = json.load(f)
+
+        subjects = root.get("subjects") or {}
+        block = subjects.get(subjectNo)
+        if not block:
+            raise CommandError(f"subjectNo={subjectNo} not found in JSON: {json_path}")
+
+        # ---- Subject を確定（Phase3）----
         try:
-            with path.open("r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            raise CommandError(f"Failed to read JSON: {path} ({e})")
-
-    def _parse_stdnos(self, raw_list):
-        stdnos = []
-        for x in raw_list or []:
-            if not x:
-                continue
-            parts = [p.strip() for p in str(x).split(",")]
-            stdnos.extend([p for p in parts if p])
-        # unique preserve order
-        seen = set()
-        out = []
-        for s in stdnos:
-            if s in seen:
-                continue
-            seen.add(s)
-            out.append(s)
-        return out
-
-    def _norm_qno(self, qno):
-        return (qno or "").strip()
-
-    def _compare_question_order(self, version, json_order, db_questions):
-        """
-        json_order: list of {gyo, retu, q_no}
-        db_questions: list of Question ordered by ("gyo","retu","id")
-        """
-        if len(json_order) != len(db_questions):
-            raise CommandError(
-                f"[ABORT] question count mismatch for version={version}: "
-                f"JSON={len(json_order)} DB={len(db_questions)}"
-            )
-
-        for i, (j, q) in enumerate(zip(json_order, db_questions), start=1):
-            j_gyo = int(j.get("gyo") or 0)
-            j_retu = int(j.get("retu") or 0)
-            j_qno = self._norm_qno(j.get("q_no"))
-
-            d_gyo = int(q.gyo or 0)
-            d_retu = int(q.retu or 0)
-            d_qno = self._norm_qno(q.q_no)
-
-            if (j_gyo, j_retu, j_qno) != (d_gyo, d_retu, d_qno):
-                raise CommandError(
-                    "[ABORT] question_order mismatch (index-based mapping would be unsafe)\n"
-                    f"  version={version} index={i}\n"
-                    f"  JSON: gyo={j_gyo} retu={j_retu} q_no='{j_qno}'\n"
-                    f"  DB : gyo={d_gyo} retu={d_retu} q_no='{d_qno}' (question_id={q.id})"
-                )
-
-    # ----------------------------
-    # Main
-    # ----------------------------
-    def handle(self, *args, **options):
-        subjectNo = options["subjectNo"]
-        only_stdnos = self._parse_stdnos(options["stdno"])
-        assume_yes = bool(options["yes"])
-        dry_run = bool(options["dry_run"])
-
-        json_path = Path(settings.BASE_DIR) / "exam2" / "data" / "export" / "examTFdata.json"
-        root = self._load_json(json_path)
-
-        subjects = (root or {}).get("subjects") or {}
-        if subjectNo not in subjects:
-            raise CommandError(f"Subject block not found in JSON: subjectNo={subjectNo}")
-
-        block = subjects[subjectNo]
-
-        # Basic block fields
-        json_fsyear = block.get("fsyear")
-        json_term = block.get("term")
-        json_exams = block.get("exams") or {}
-        json_students = block.get("students") or {}
-
-        if json_fsyear is None or json_term is None:
-            raise CommandError("JSON subject block must include fsyear and term")
-
-        # DB subject
-        try:
-            subject = Subject.objects.get(subjectNo=subjectNo)
+            subject = Subject.objects.get(subjectNo=subjectNo, fsyear=fsyear)
         except Subject.DoesNotExist:
-            raise CommandError(f"DB Subject not found: subjectNo={subjectNo}")
+            raise CommandError(f"Subject not found in DB: subjectNo={subjectNo} fsyear={fsyear}")
 
-        # ----------------------------
-        # 1) Validate exams + hash + question_order
-        # ----------------------------
-        # Build DB exam map for this subject/fsyear/term
-        db_exam_map = {}
-        for version, exinfo in json_exams.items():
-            if not version:
-                raise CommandError("JSON exams has empty version key")
+        term_db = int(subject.term or 0)
+        term_opt = opts["term"]
+        if term_opt is not None and int(term_opt) != term_db:
+            raise CommandError(f"term mismatch: option={term_opt} but Subject.term={term_db} (subjectNo={subjectNo} fsyear={fsyear})")
 
-            exam = Exam.objects.filter(
-                subject=subject,
-                fsyear=int(json_fsyear),
-                term=int(json_term),
-                version=version,
-            ).first()
+        exams_json = block.get("exams") or {}
+        students_json = block.get("students") or {}
 
-            if not exam:
+        if not exams_json:
+            raise CommandError("JSON exams is empty.")
+        if not students_json:
+            self.stdout.write(self.style.WARNING("JSON students is empty. (no scoring data)"))
+
+        # ---- Exam を version で取得 ----
+        exam_by_version = {}
+        questions_by_version = {}
+
+        for v, exinfo in exams_json.items():
+            try:
+                exam = Exam.objects.get(subject=subject, version=v)
+            except Exam.DoesNotExist:
+                raise CommandError(f"Exam not found in DB: subject={subjectNo}({fsyear}) version={v}")
+
+            # hash チェック
+            json_hash = exinfo.get("problem_hash") or ""
+            db_hash = exam.problem_hash or ""
+            if json_hash and db_hash and (json_hash != db_hash) and (not opts["force_hash"]):
                 raise CommandError(
-                    f"[ABORT] DB Exam not found for subjectNo={subjectNo} fsyear={json_fsyear} term={json_term} version={version}"
+                    f"problem_hash mismatch version={v}: json={json_hash} db={db_hash}. "
+                    "止めます（--force-hash で無視可能）"
                 )
 
-            # hash check (strict)
-            json_hash = exinfo.get("problem_hash")
-            db_hash = exam.problem_hash
-            if (json_hash or None) != (db_hash or None):
+            exam_by_version[v] = exam
+
+            # Question 並び（export/import共通の定義）
+            q_list = list(Question.objects.filter(exam=exam).order_by("gyo", "retu", "id"))
+            if not q_list:
+                raise CommandError(f"No questions for exam_id={exam.id} version={v}")
+
+            questions_by_version[v] = q_list
+
+            # question_order チェック
+            qorder = exinfo.get("question_order") or []
+            if len(qorder) != len(q_list) and (not opts["force_order"]):
                 raise CommandError(
-                    "[ABORT] Exam.problem_hash mismatch\n"
-                    f"  subjectNo={subjectNo} fsyear={json_fsyear} term={json_term} version={version}\n"
-                    f"  JSON: {json_hash}\n"
-                    f"  DB : {db_hash}"
+                    f"question count mismatch version={v}: json={len(qorder)} db={len(q_list)} "
+                    "止めます（--force-order で無視可能）"
                 )
 
-            # question_order check (strict)
-            json_order = exinfo.get("question_order")
-            if not isinstance(json_order, list) or len(json_order) == 0:
-                raise CommandError(f"[ABORT] JSON exams[{version}].question_order is missing/empty")
+            # 並びチェック（gyo/retu/q_no）
+            if qorder and len(qorder) == len(q_list) and (not opts["force_order"]):
+                for i, (qo, q) in enumerate(zip(qorder, q_list)):
+                    if int(qo.get("gyo", 0)) != int(q.gyo or 0) or int(qo.get("retu", 0)) != int(q.retu or 0):
+                        raise CommandError(
+                            f"question_order mismatch version={v} idx={i}: "
+                            f"json(gyo,retu)=({qo.get('gyo')},{qo.get('retu')}) "
+                            f"db=({q.gyo},{q.retu})"
+                        )
+                    # q_no は表示用途。違っても運用上許すならここは比較しない手もあります。
+                    # 今回は「ズレ検知」のために比較（空は無視）
+                    jq = (qo.get("q_no") or "").strip()
+                    dq = (q.q_no or "").strip()
+                    if jq and dq and jq != dq:
+                        raise CommandError(
+                            f"q_no mismatch version={v} idx={i}: json='{jq}' db='{dq}' "
+                            "（DB側の q_no 修正 or --force-order を検討）"
+                        )
 
-            db_questions = list(
-                Question.objects.filter(exam=exam).order_by("gyo", "retu", "id")
-            )
-            if not db_questions:
-                raise CommandError(f"[ABORT] DB Questions not found for exam_id={exam.id} version={version}")
-
-            self._compare_question_order(version, json_order, db_questions)
-
-            db_exam_map[version] = {
-                "exam": exam,
-                "questions": db_questions,  # ordered
-            }
-
-        # ----------------------------
-        # 2) Determine target students
-        # ----------------------------
-        target_items = []
-        for stdNo, sinfo in json_students.items():
-            if only_stdnos and stdNo not in only_stdnos:
-                continue
-            target_items.append((stdNo, sinfo))
-
-        if only_stdnos and len(target_items) == 0:
-            raise CommandError(f"No matching students in JSON for --stdno={only_stdnos}")
-
-        if len(target_items) == 0:
-            raise CommandError("No students found in JSON subject block (or filtered out).")
-
-        # ----------------------------
-        # 3) Pre-validate students payload shape
-        # ----------------------------
-        for stdNo, sinfo in target_items:
-            version = (sinfo.get("version") or "").strip()
-            if version not in db_exam_map:
-                raise CommandError(
-                    f"[ABORT] JSON student version not found in exams map: stdNo={stdNo} version={version}"
-                )
-
-            answers = sinfo.get("answers")
-            if not isinstance(answers, list):
-                raise CommandError(f"[ABORT] JSON students[{stdNo}].answers must be an array")
-
-            expected_len = len(db_exam_map[version]["questions"])
-            if len(answers) != expected_len:
-                raise CommandError(
-                    "[ABORT] answers length mismatch\n"
-                    f"  stdNo={stdNo} version={version}\n"
-                    f"  JSON answers={len(answers)}\n"
-                    f"  DB questions={expected_len}"
-                )
-
-            # validate elements
-            for i, a in enumerate(answers, start=1):
-                if not isinstance(a, dict):
-                    raise CommandError(f"[ABORT] answers element must be object: stdNo={stdNo} index={i}")
-                if "TF" not in a or "hosei" not in a:
-                    raise CommandError(f"[ABORT] answers element must have TF/hosei: stdNo={stdNo} index={i}")
-                try:
-                    int(a.get("TF"))
-                    int(a.get("hosei"))
-                except Exception:
-                    raise CommandError(f"[ABORT] TF/hosei must be int-castable: stdNo={stdNo} index={i}")
-
-        # ----------------------------
-        # 4) Show summary + confirm
-        # ----------------------------
-        self.stdout.write(self.style.WARNING("=== Import plan (validated OK so far) ==="))
-        self.stdout.write(f"JSON: {json_path}")
-        self.stdout.write(f"Target subjectNo={subjectNo} ({subject.name}) fsyear={json_fsyear} term={json_term}")
-        self.stdout.write(f"Target students: {len(target_items)}" + (f" (filtered: {only_stdnos})" if only_stdnos else ""))
-        self.stdout.write("Exam versions in JSON:")
-        for v, info in json_exams.items():
-            h = info.get("problem_hash")
-            self.stdout.write(f"  - {v}: problem_hash={(h[:7] + '...') if h else 'None'}")
-
-        if dry_run:
-            self.stdout.write(self.style.WARNING("[DRY-RUN] No DB writes will be performed."))
-
-        if not assume_yes and not dry_run:
-            ans = input("Proceed to apply changes? (y/yes to continue): ").strip().lower()
-            if ans not in ("y", "yes"):
-                self.stdout.write(self.style.WARNING("Aborted by user."))
-                return
-
-        # ----------------------------
-        # 5) Apply
-        # ----------------------------
-        if dry_run:
-            self.stdout.write(self.style.SUCCESS("Dry-run completed (all validations passed)."))
+        # ---- dry-run ならここで終了 ----
+        if opts["dry_run"]:
+            self.stdout.write(self.style.SUCCESS("DRY-RUN OK (validated). No DB writes."))
             return
 
-        updated_students = 0
-        updated_studentexams = 0
-        updated_adjusts = 0
-        updated_versions = 0
+        # ---- 反映（atomic）----
+        updated_se = 0
+        created_se = 0
+        updated_adj = 0
+        created_adj = 0
+        updated_sev = 0
+        created_sev = 0
 
         with transaction.atomic():
-            for stdNo, sinfo in target_items:
-                version = (sinfo.get("version") or "").strip()
-                exam = db_exam_map[version]["exam"]
-                db_questions = db_exam_map[version]["questions"]
+            for stdNo, sinfo in students_json.items():
+                try:
+                    student = Student.objects.get(stdNo=stdNo)
+                except Student.DoesNotExist:
+                    raise CommandError(f"Student not found in DB: stdNo={stdNo}")
+
+                version = sinfo.get("version")
+                if version not in exam_by_version:
+                    raise CommandError(f"Unknown version for student={stdNo}: {version}")
+
+                exam = exam_by_version[version]
+                q_list = questions_by_version[version]
+
                 answers = sinfo.get("answers") or []
-                adjust_val = int(sinfo.get("adjust") or 0)
-
-                # Student
-                student = Student.objects.filter(stdNo=stdNo).first()
-                if not student:
-                    raise CommandError(f"[ABORT] DB Student not found: stdNo={stdNo}")
-
-                # StudentExamVersion: align (optional but consistent)
-                sev = StudentExamVersion.objects.filter(student=student, exam__subject=subject, exam__fsyear=int(json_fsyear), exam__term=int(json_term)).first()
-                if sev:
-                    if sev.exam_id != exam.id:
-                        sev.exam = exam
-                        sev.save(update_fields=["exam"])
-                        updated_versions += 1
-                else:
-                    StudentExamVersion.objects.create(student=student, exam=exam)
-                    updated_versions += 1
-
-                # StudentExam rows (must exist)
-                se_qs = list(
-                    StudentExam.objects.filter(student=student, exam=exam)
-                    .select_related("question")
-                    .order_by("question__gyo", "question__retu", "question__id")
-                )
-
-                if len(se_qs) != len(db_questions):
+                if len(answers) != len(q_list):
                     raise CommandError(
-                        "[ABORT] StudentExam count mismatch (DB incomplete?)\n"
-                        f"  stdNo={stdNo} version={version} exam_id={exam.id}\n"
-                        f"  DB StudentExam={len(se_qs)} DB Questions={len(db_questions)}"
+                        f"answers length mismatch stdNo={stdNo} version={version}: "
+                        f"json={len(answers)} db_questions={len(q_list)}"
                     )
 
-                # Apply by index
-                for se, a in zip(se_qs, answers):
-                    se.TF = int(a["TF"])
-                    se.hosei = int(a["hosei"])
-                StudentExam.objects.bulk_update(se_qs, ["TF", "hosei"])
-                updated_studentexams += len(se_qs)
+                # StudentExamVersion を (student, subject) 単位で確定させる
+                sev_qs = StudentExamVersion.objects.filter(student=student, exam__subject=subject)
+                if sev_qs.exists():
+                    # 既存が複数でも全部更新（変な状態を一掃）
+                    n = sev_qs.update(exam=exam)
+                    updated_sev += n
+                else:
+                    StudentExamVersion.objects.create(student=student, exam=exam)
+                    created_sev += 1
+
+                # 既存 StudentExam を辞書化
+                se_qs = StudentExam.objects.filter(student=student, exam=exam)
+                se_by_qid = {se.question_id: se for se in se_qs}
+
+                to_update = []
+                to_create = []
+
+                for q, a in zip(q_list, answers):
+                    TF = int(a.get("TF", 0))
+                    hosei = int(a.get("hosei", 0) or 0)
+
+                    se = se_by_qid.get(q.id)
+                    if se is None:
+                        if not opts["fill_missing"]:
+                            raise CommandError(
+                                f"StudentExam missing stdNo={stdNo} exam_id={exam.id} question_id={q.id} "
+                                "（--fill-missing で作成可能）"
+                            )
+                        to_create.append(StudentExam(student=student, exam=exam, question=q, TF=TF, hosei=hosei))
+                    else:
+                        if se.TF != TF or int(se.hosei or 0) != hosei:
+                            se.TF = TF
+                            se.hosei = hosei
+                            to_update.append(se)
+
+                if to_create:
+                    StudentExam.objects.bulk_create(to_create, ignore_conflicts=False)
+                    created_se += len(to_create)
+
+                if to_update:
+                    StudentExam.objects.bulk_update(to_update, ["TF", "hosei"])
+                    updated_se += len(to_update)
 
                 # ExamAdjust
-                adj_obj, created = ExamAdjust.objects.get_or_create(
-                    student=student,
-                    exam=exam,
-                    defaults={"adjust": adjust_val},
-                )
-                if not created and int(adj_obj.adjust or 0) != adjust_val:
-                    adj_obj.adjust = adjust_val
-                    adj_obj.save(update_fields=["adjust"])
-                    updated_adjusts += 1
-                if created and adjust_val != 0:
-                    # created already has adjust set, count as updated for stats
-                    updated_adjusts += 1
+                if not opts["skip_adjust"]:
+                    adjust = int(sinfo.get("adjust", 0) or 0)
+                    obj, created = ExamAdjust.objects.get_or_create(
+                        student=student, exam=exam, defaults={"adjust": adjust}
+                    )
+                    if created:
+                        created_adj += 1
+                    else:
+                        if int(obj.adjust or 0) != adjust:
+                            obj.adjust = adjust
+                            obj.save(update_fields=["adjust"])
+                            updated_adj += 1
 
-                updated_students += 1
-
-        self.stdout.write(self.style.SUCCESS("インポートが完了しました"))
-        self.stdout.write(f"  対象科目: {subjectNo}  年度: {json_fsyear}  期: {json_term}")
-        self.stdout.write(f"  学生数={updated_students}")
-        self.stdout.write(f"  採点データ更新件数={updated_studentexams}")
-        self.stdout.write(f"  adjust 更新件数={updated_adjusts}")
-        self.stdout.write(f"  受験バージョン紐付け変更件数={updated_versions}")
+        self.stdout.write(self.style.SUCCESS("Import completed"))
+        self.stdout.write(f"  subjectNo={subjectNo} fsyear={fsyear} term(DB)={term_db}")
+        self.stdout.write(f"  StudentExam: created={created_se} updated={updated_se}")
+        self.stdout.write(f"  ExamAdjust:  created={created_adj} updated={updated_adj}")
+        self.stdout.write(f"  StudentExamVersion: created={created_sev} updated={updated_sev}")
+        self.stdout.write(f"  json={json_path}")
