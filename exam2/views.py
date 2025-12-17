@@ -1,13 +1,14 @@
 # exam2/views.py
-from rest_framework.decorators import api_view
-from django.shortcuts import render, get_object_or_404
-from django.views import View
+from django.conf import settings
 from django.db import models
 from django.db.models import Sum, Case, When, F, IntegerField
-from rest_framework.views import APIView
-from rest_framework.response import Response
+from django.shortcuts import render, get_object_or_404
+from django.views import View
+
 from rest_framework import status, viewsets
-from django.conf import settings
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from .models import (
     Subject,
@@ -51,36 +52,40 @@ class ExamPageView(View):
     def get(self, request, *args, **kwargs):
         return render(request, "exam.html")
 
+
 # =========================
 # 環境情報
 # =========================
 
 class EnvironmentAPIView(APIView):
+    """
+    GET /api/environment/
+    settings の表示用（termは今後不要化してもOK）
+    """
     def get(self, request, *args, **kwargs):
         return Response({
-            "environment": settings.ENVIRONMENT,
-            "fsyear": settings.FSYEAR,
-            "term": settings.TERM,
+            "environment": getattr(settings, "ENVIRONMENT", ""),
+            "fsyear": getattr(settings, "FSYEAR", None),
+            "term": getattr(settings, "TERM", None),
         })
 
+
 # =========================
-# 試験一覧（index 用）
+# 科目一覧（index 用）
 # =========================
+
 class SubjectListAPIView(APIView):
     """
     GET /api/subjects/?fsyear=2025
-    → 科目一覧（subjectNo, name, nenji, term を返す）
+    → 科目一覧（subjectNo, name, nenji, fsyear, term）
     ※ 新構造：Subject に fsyear/term がある
     """
-
-
     def get(self, request, *args, **kwargs):
         fsyear = request.GET.get("fsyear") or getattr(settings, "FSYEAR", None)
         if fsyear is None:
             return Response({"error": "fsyear が未指定です"}, status=400)
 
         fsyear = int(fsyear)
-
         subjects = Subject.objects.filter(fsyear=fsyear).order_by("subjectNo")
 
         data = [
@@ -99,8 +104,9 @@ class SubjectListAPIView(APIView):
 class ExamsOfSubjectAPIView(APIView):
     """
     GET /api/exams_of_subject/?subjectNo=1010401&fsyear=2025
+    → 指定科目（年度込み）の Exam 一覧（A/B…）
     """
-    def get(self, request):
+    def get(self, request, *args, **kwargs):
         subjectNo = request.GET.get("subjectNo")
         fsyear = request.GET.get("fsyear") or getattr(settings, "FSYEAR", None)
 
@@ -108,7 +114,6 @@ class ExamsOfSubjectAPIView(APIView):
             return Response({"error": "subjectNo と fsyear が必要です"}, status=400)
 
         subject = get_object_or_404(Subject, subjectNo=subjectNo, fsyear=int(fsyear))
-
         exams = Exam.objects.filter(subject=subject).order_by("version")
 
         data = [
@@ -122,10 +127,18 @@ class ExamsOfSubjectAPIView(APIView):
         ]
         return Response(data, status=200)
 
+
 class StudentsOfExamAPIView(APIView):
-    def get(self, request):
+    """
+    GET /api/students_of_exam/?exam_id=xx
+    → 試験(Exam)を受けた学生（StudentExamVersionベース）
+    """
+    def get(self, request, *args, **kwargs):
         exam_id = request.GET.get("exam_id")
-        sev_list = StudentExamVersion.objects.filter(exam_id=exam_id)
+        if not exam_id:
+            return Response({"error": "exam_id が必要です"}, status=400)
+
+        sev_list = StudentExamVersion.objects.filter(exam_id=exam_id).select_related("student", "exam")
 
         data = [
             {
@@ -135,26 +148,19 @@ class StudentsOfExamAPIView(APIView):
             }
             for sev in sev_list
         ]
+        return Response(data, status=200)
 
-        return Response(data)
 
 class ExamsWithYearAPIView(APIView):
     """
+    旧互換。必要なら残す。不要なら削除してOK。
     GET /api/exams_with_year/
-    → {
-         "current_year": 2025,
-         "exams": [
-           {"id": 1, "exam_code": "1010401-A", "title": "情報処理Ⅰ（1期 A版）"},
-           ...
-         ]
-       }
     """
-
     def get(self, request, *args, **kwargs):
         from datetime import datetime
 
         current_year = datetime.now().year
-        exams = Exam.objects.all().order_by("subject__subjectNo", "version")
+        exams = Exam.objects.all().select_related("subject").order_by("subject__subjectNo", "subject__fsyear", "version")
 
         data = {
             "current_year": current_year,
@@ -177,9 +183,8 @@ class ExamsWithYearAPIView(APIView):
 class ExamRetrieveAPIView(APIView):
     """
     GET /api/exams/<pk>/
-    → Exam + Question 一覧
+    → ExamSerializer（questions含む想定）
     """
-
     def get(self, request, pk, *args, **kwargs):
         exam = get_object_or_404(Exam, pk=pk)
         serializer = ExamSerializer(exam)
@@ -193,19 +198,15 @@ class ExamRetrieveAPIView(APIView):
 class ExamStudentListAPIView(APIView):
     """
     GET /api/exam-students/?exam_id=1
-    → その試験を受けた学生一覧
+    → その試験を受けた学生一覧（StudentExamベース）
     """
-
     def get(self, request, *args, **kwargs):
         exam_id = request.query_params.get("exam_id")
         if not exam_id:
-            return Response(
-                {"error": "exam_id が必要です"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"error": "exam_id が必要です"}, status=400)
 
         exam = get_object_or_404(Exam, pk=exam_id)
-        # この Exam に StudentExam がある学生を抽出
+
         student_ids = (
             StudentExam.objects.filter(exam=exam)
             .values_list("student_id", flat=True)
@@ -227,7 +228,6 @@ class StudentExamViewSet(viewsets.ModelViewSet):
       GET: exam & student で絞り込み
       PATCH: TF / hosei 更新
     """
-
     queryset = StudentExam.objects.all().select_related("student", "exam", "question")
     serializer_class = StudentExamSerializer
 
@@ -240,49 +240,23 @@ class StudentExamViewSet(viewsets.ModelViewSet):
 
         if exam_id:
             qs = qs.filter(exam_id=exam_id)
-
         if student_id:
             qs = qs.filter(student_id=student_id)
-
         if student_stdno:
             qs = qs.filter(student__stdNo=student_stdno)
 
-        return qs.order_by("question__gyo", "question__retu")
-
-    def create(self, request, *args, **kwargs):
-        """
-        必要ならここで「Exam と Student から一括生成」を実装しても良いが、
-        今回は既存データ前提でそのままにしておく。
-        """
-        return super().create(request, *args, **kwargs)
+        return qs.order_by("question__gyo", "question__retu", "question_id")
 
 
 # =========================
-# 試験結果（index & adjust 共通）
+# 試験結果（採点一覧/結果画面）
 # =========================
 
 class ExamResultAPIView(APIView):
     """
     GET /api/examresult/?wexamid=1
-
-    → {
-         "wexamid": 1,
-         "exam_name": "情報処理Ⅰ（1期 A版）",
-         "fsyear": "2025",
-         "students": [
-           {
-             "stdNo": "23367001",
-             "nickname": "ルオン",
-             "score": 2,         # 素点 (TF=1 の points 合計)
-             "correction": 0,    # 補正の合計 (hosei の合計)
-             "adjust": 0,        # ExamAdjust.adjust
-             "total": 2          # score + correction
-           },
-           ...
-         ]
-       }
+    → Exam1件の学生別集計（score/correction/adjust/total）
     """
-
     def get(self, request, *args, **kwargs):
         exam_id = request.query_params.get("wexamid")
         if not exam_id:
@@ -290,13 +264,11 @@ class ExamResultAPIView(APIView):
 
         exam = get_object_or_404(Exam, pk=exam_id)
 
-        # この Exam に紐づく全 StudentExam
         student_exams = (
             StudentExam.objects.filter(exam=exam)
             .select_related("student", "question")
         )
 
-        # 学生ごとに集計
         result = {}
         for se in student_exams:
             stu = se.student
@@ -316,7 +288,6 @@ class ExamResultAPIView(APIView):
             result[stu.id]["score"] += base
             result[stu.id]["correction"] += corr
 
-        # ExamAdjust を反映
         adjusts = ExamAdjust.objects.filter(exam=exam).select_related("student")
         adjust_map = {adj.student.id: adj.adjust for adj in adjusts}
 
@@ -327,73 +298,65 @@ class ExamResultAPIView(APIView):
             adj = adjust_map.get(stu_id, 0)
             total = base + corr
 
-            students_data.append(
-                {
-                    "stdNo": d["stdNo"],
-                    "nickname": d["nickname"],
-                    "score": base,
-                    "correction": corr,
-                    "adjust": adj,
-                    "total": total,
-                }
-            )
+            students_data.append({
+                "stdNo": d["stdNo"],
+                "nickname": d["nickname"],
+                "score": base,
+                "correction": corr,
+                "adjust": adj,
+                "total": total,
+            })
 
-        data = {
+        return Response({
             "wexamid": exam.id,
             "exam_name": exam.title,
-            "fsyear": exam.fsyear,
+            "fsyear": exam.subject.fsyear,   # ★ 新構造
+            "term": exam.subject.term,       # ★ 新構造
             "students": students_data,
-        }
-        return Response(data, status=200)
+        }, status=200)
 
 
 # =========================
-# ExamAdjust 更新 API
+# ExamAdjust 更新（旧：exam単位）
 # =========================
 
 class ExamAdjustUpdateAPIView(APIView):
     """
     POST /api/exam-adjust-update/
-
     [
       {"exam_id": 1, "stdNo": "23367001", "adjust": 3},
       ...
     ]
     """
-
     def post(self, request, *args, **kwargs):
         payload = request.data
         if not isinstance(payload, list):
-            return Response(
-                {"error": "配列で送ってください"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"error": "配列で送ってください"}, status=400)
 
         for item in payload:
             exam_id = item.get("exam_id")
             stdNo = item.get("stdNo")
             adjust = item.get("adjust", 0)
-
             if not (exam_id and stdNo):
                 continue
 
             exam = get_object_or_404(Exam, pk=exam_id)
             student = get_object_or_404(Student, stdNo=stdNo)
 
-            obj, _created = ExamAdjust.objects.get_or_create(
+            obj, created = ExamAdjust.objects.get_or_create(
                 exam=exam,
                 student=student,
-                defaults={"adjust": adjust},
+                defaults={"adjust": int(adjust)},
             )
-            if not _created:
-                obj.adjust = adjust
-                obj.save()
+            if not created:
+                obj.adjust = int(adjust)
+                obj.save(update_fields=["adjust"])
 
         return Response({"status": "ok"}, status=200)
 
 
 # =========================
-# adjust_comment 用 API
+# adjust_comment（旧：exam単位）
 # =========================
 
 class ExamAdjustCommentAPIView(APIView):
@@ -401,7 +364,6 @@ class ExamAdjustCommentAPIView(APIView):
     GET /api/examadjustcomment/?wexamid=1
     PUT /api/examadjustcomment/?wexamid=1 { "adjust_comment": "..." }
     """
-
     def get_exam(self, request):
         exam_id = request.query_params.get("wexamid")
         if not exam_id:
@@ -425,13 +387,13 @@ class ExamAdjustCommentAPIView(APIView):
         exam.save(update_fields=["adjust_comment"])
         return Response({"status": "ok"}, status=200)
 
+
 @api_view(["PATCH"])
 def studentexam_bulk_update(request):
     """
     StudentExam の複数レコードを一括更新する
     """
     data = request.data  # [{id, TF, hosei}, ...]
-
     for item in data:
         obj = StudentExam.objects.get(id=item["id"])
         if "TF" in item:
@@ -439,89 +401,90 @@ def studentexam_bulk_update(request):
         if "hosei" in item:
             obj.hosei = item["hosei"]
         obj.save()
-
     return Response({"status": "ok"})
 
 
-# exam2/api_views.py
-from rest_framework.response import Response
-from rest_framework.views import APIView
-from django.shortcuts import get_object_or_404
-
-from exam2.models import (
-    Subject, Student, Exam, StudentExamVersion,
-    StudentExam, ExamAdjust
-)
-
+# =========================
+# （科目ベース）学生一覧：必要なら使う
+# =========================
 class StudentsOfSubjectAPIView(APIView):
     def get(self, request):
         subjectNo = request.GET.get("subjectNo")
-        fsyear = int(request.GET.get("fsyear"))   # ★ ここが重要！
-        term = request.GET.get("term")
+        fsyear = request.GET.get("fsyear") or getattr(settings, "FSYEAR", None)
 
-        subject = get_object_or_404(Subject, subjectNo=subjectNo)
+        if not subjectNo or fsyear is None:
+            return Response({"error": "subjectNo と fsyear が必要です"}, status=400)
+
+        subject = get_object_or_404(Subject, subjectNo=subjectNo, fsyear=int(fsyear))
+        term = subject.term  # ★ settings.TERM ではなく Subject.term
 
         # 科目の指定学年
         target_nenji = subject.nenji
+        entyear = int(fsyear) - target_nenji + 1
 
-        # 対象学生の入学年度を計算
-        entyear = fsyear - target_nenji + 1
-
-        # 学年の学生一覧
-        students = Student.objects.filter(entyear=entyear)
-
+        students = Student.objects.filter(entyear=entyear).order_by("stdNo")
         results = []
 
         for stu in students:
-            # ★ version と exam_id を学生ごとに取得
             sev = StudentExamVersion.objects.filter(
                 student=stu,
-                exam__subject=subject,
-                exam__fsyear=fsyear,
-                exam__term=term,
-            ).first()
+                exam__subject=subject,   # ★ここだけでOK（Examにfsyear/termは無い）
+            ).select_related("exam").first()
 
             version = sev.exam.version if sev else "？"
             exam_id = sev.exam.id if sev else None
 
-            # ★ 点数（A/B 関係なく、その学生の exam_id で取る）
-            total_score = (
-                StudentExam.objects.filter(student=stu, exam_id=exam_id)
-                .aggregate(total=models.Sum(models.F("TF") + models.F("hosei")))["total"]
-                or 0
-            )
+            # 得点（points方式に揃えるならこちら推奨）
+            if exam_id is None:
+                score = 0
+                hosei = 0
+            else:
+                agg = StudentExam.objects.filter(student=stu, exam_id=exam_id).aggregate(
+                    score=Sum(
+                        Case(
+                            When(TF=1, then=F("question__points")),
+                            default=0,
+                            output_field=IntegerField(),
+                        )
+                    ),
+                    hosei=Sum("hosei"),
+                )
+                score = agg["score"] or 0
+                hosei = agg["hosei"] or 0
 
-            # ★ adjust（無ければ 0）
-            adjust = ExamAdjust.objects.filter(student=stu, exam_id=exam_id).first()
-            adjust_value = adjust.adjust if adjust else 0
+            adj = ExamAdjust.objects.filter(student=stu, exam_id=exam_id).first() if exam_id else None
+            adjust_value = adj.adjust if adj else 0
 
             results.append({
                 "stdNo": stu.stdNo,
-                "name": stu.nickname,
+                "nickname": stu.nickname,
                 "version": version,
                 "exam_id": exam_id,
-                "score": total_score,
-                "hosei": 0,
+                "score": score,
+                "hosei": hosei,
                 "adjust": adjust_value,
-                "total": total_score + adjust_value,
+                "total": score + hosei + adjust_value,
+                "term": term,  # 表示に使いたければ返す（不要なら消してOK）
             })
 
-        return Response({"students": results})
+        return Response({"students": results}, status=200)
+
+
+# =========================
+# （科目ベース）調整一覧：index/examadjust 共通
+# =========================
 
 class ExamAdjustSubjectAPIView(APIView):
     """
     GET /api/examadjust_subject/?subjectNo=1010401&fsyear=2025
-    （term は不要。Subject.term を使う）
+    ※ term は Subject.term を使う（パラメータ不要、来ても無視）
     """
     def get(self, request, *args, **kwargs):
         subjectNo = request.GET.get("subjectNo")
         fsyear = request.GET.get("fsyear") or getattr(settings, "FSYEAR", None)
 
         if not subjectNo or fsyear is None:
-            return Response(
-                {"error": "subjectNo と fsyear を指定してください"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"error": "subjectNo と fsyear を指定してください"}, status=400)
 
         subject = get_object_or_404(Subject, subjectNo=subjectNo, fsyear=int(fsyear))
 
@@ -536,7 +499,18 @@ class ExamAdjustSubjectAPIView(APIView):
             for e in exams
         }
 
-        # 学生→受験Exam(A/B) の対応
+        # フロント互換用に「代表1件」も返す（従来 data.exam を参照していた場合に便利）
+        representative_exam = exams[0] if exams else None
+        exam_info = None
+        if representative_exam:
+            exam_info = {
+                "id": representative_exam.id,
+                "version": representative_exam.version,
+                "title": representative_exam.title,
+                "problem_hash": representative_exam.problem_hash,
+            }
+
+        # 学生→受験Exam(A/B) の対応（subjectで十分）
         sev_qs = (
             StudentExamVersion.objects.filter(exam__subject=subject)
             .select_related("student", "exam")
@@ -549,7 +523,6 @@ class ExamAdjustSubjectAPIView(APIView):
             stu = sev.student
             exam = sev.exam  # A or B
 
-            # 得点集計（points + hosei）
             score_agg = StudentExam.objects.filter(
                 student=stu,
                 exam=exam,
@@ -567,34 +540,30 @@ class ExamAdjustSubjectAPIView(APIView):
             score = score_agg["score"] or 0
             hosei = score_agg["hosei"] or 0
 
-            # adjust
             adj = ExamAdjust.objects.filter(student=stu, exam=exam).first()
             adjust = adj.adjust if adj else 0
 
-            students_data.append(
-                {
-                    "stdNo": stu.stdNo,
-                    "nickname": stu.nickname,
-                    "version": exam.version,
-                    "exam_id": exam.id,
-                    "score": score,
-                    "hosei": hosei,
-                    "adjust": adjust,
-                    "total": score + hosei + adjust,
-                }
-            )
+            students_data.append({
+                "stdNo": stu.stdNo,
+                "nickname": stu.nickname,
+                "version": exam.version,
+                "exam_id": exam.id,
+                "score": score,
+                "hosei": hosei,
+                "adjust": adjust,
+                "total": score + hosei + adjust,
+            })
 
-        return Response(
-            {
-                "subjectNo": subject.subjectNo,
-                "subject_name": subject.name,
-                "fsyear": subject.fsyear,
-                "term": subject.term,          # ★ Subject.term を返す（今後 settings.TERM 不要へ）
-                "exams": exams_info,           # ★ 版ごとの hash が必要なら使える
-                "students": students_data,
-            },
-            status=status.HTTP_200_OK,
-        )    
+        return Response({
+            "subjectNo": subject.subjectNo,
+            "subject_name": subject.name,
+            "fsyear": subject.fsyear,
+            "term": subject.term,
+            "exam": exam_info,      # ★ 互換用（代表）
+            "exams": exams_info,    # ★ 推奨：版ごとA/B
+            "students": students_data,
+        }, status=200)
+
 
 class ExamAdjustCommentSubjectAPIView(APIView):
     """
@@ -602,7 +571,6 @@ class ExamAdjustCommentSubjectAPIView(APIView):
     /api/examadjustcomment_subject/?subjectNo=XXX&fsyear=YYY
     term は Subject.term を使う（パラメータ不要）
     """
-
     def get(self, request, *args, **kwargs):
         subjectNo = request.GET.get("subjectNo")
         fsyear = request.GET.get("fsyear") or getattr(settings, "FSYEAR", None)
@@ -629,43 +597,35 @@ class ExamAdjustCommentSubjectAPIView(APIView):
 
         comment = request.data.get("adjust_comment", "")
 
-        exams = Exam.objects.filter(subject=subject)
-        for e in exams:
+        for e in Exam.objects.filter(subject=subject):
             e.adjust_comment = comment
             e.save(update_fields=["adjust_comment"])
 
         return Response({"status": "ok", "adjust_comment": comment}, status=200)
 
+
 class ExamAdjustUpdateSubjectAPIView(APIView):
     """
     POST /api/exam-adjust-update-subject/
     {
-        "subjectNo": "2030402",
-        "fsyear": 2025,
-        "term": 2,
-        "items": [
-            {
-                "stdNo": "23367001",
-                "exam_id": 7,
-                "adjust": 3
-            },
-            ...
-        ]
+      "subjectNo": "1010401",
+      "fsyear": 2025,
+      "items": [
+        {"stdNo": "23367001", "exam_id": 7, "adjust": 3},
+        ...
+      ]
     }
+    term は不要（来ても無視してOK）
     """
-
     def post(self, request, *args, **kwargs):
-
         subjectNo = request.data.get("subjectNo")
-        fsyear = request.data.get("fsyear")
-        term = request.data.get("term")
+        fsyear = request.data.get("fsyear") or getattr(settings, "FSYEAR", None)
         items = request.data.get("items", [])
 
-        if not (subjectNo and fsyear and term):
-            return Response(
-                {"error": "subjectNo, fsyear, term が必要です"},
-                status=400
-            )
+        if not subjectNo or fsyear is None:
+            return Response({"error": "subjectNo と fsyear が必要です"}, status=400)
+
+        subject = get_object_or_404(Subject, subjectNo=subjectNo, fsyear=int(fsyear))
 
         for item in items:
             exam_id = item.get("exam_id")
@@ -676,15 +636,23 @@ class ExamAdjustUpdateSubjectAPIView(APIView):
                 continue
 
             exam = get_object_or_404(Exam, pk=exam_id)
+
+            # safety：別科目の exam が混ざったら弾く
+            if exam.subject_id != subject.id:
+                return Response(
+                    {"error": f"exam_id={exam_id} は subjectNo={subjectNo}({fsyear}) に属しません"},
+                    status=400
+                )
+
             student = get_object_or_404(Student, stdNo=stdNo)
 
             obj, created = ExamAdjust.objects.get_or_create(
                 exam=exam,
                 student=student,
-                defaults={"adjust": adjust}
+                defaults={"adjust": int(adjust)},
             )
             if not created:
-                obj.adjust = adjust
-                obj.save()
+                obj.adjust = int(adjust)
+                obj.save(update_fields=["adjust"])
 
         return Response({"status": "ok"}, status=200)

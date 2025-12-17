@@ -56,7 +56,7 @@ async function initAdjustPage() {
         `/api/examadjust_subject/?subjectNo=${subjectNo}&fsyear=${fsyear}&term=${term}`
     );
 
-    renderExamInfo(data.exam);
+    renderExamInfo(data.exams);
 
     // 見出し表示
     document.getElementById("exam-year").textContent = fsyear;
@@ -104,17 +104,53 @@ async function fetchJSON(url, options = {}) {
     return await res.json();
 }
 
-// ---------------- 試験情報表示 ----------------
-function renderExamInfo(exam) {
+// ---------------- 試験情報（A/B 両方の hash）表示 ----------------
+function renderExamInfo(exams) {
     const info = document.getElementById("exam-info");
     if (!info) return;
 
-    if (!exam || !exam.problem_hash) {
+    // exams が無い/空なら表示しない
+    if (!exams || typeof exams !== "object") {
         info.textContent = "";
         return;
     }
 
-    info.textContent = `[${exam.problem_hash.slice(0, 7)}]`;
+    // A,B,C... の順に並べたい（存在するものだけ）
+    const order = ["A", "B", "C", "D"];
+    const versions = Object.keys(exams).sort((a, b) => {
+        const ia = order.indexOf(a);
+        const ib = order.indexOf(b);
+        if (ia === -1 && ib === -1) return a.localeCompare(b);
+        if (ia === -1) return 1;
+        if (ib === -1) return -1;
+        return ia - ib;
+    });
+
+    // hash を集める（null/空は除外）
+    const hashes = [];
+    const fullHashes = [];
+    for (const v of versions) {
+        const h = exams[v]?.problem_hash;
+        if (!h) continue;
+        fullHashes.push(h);
+        hashes.push(h.slice(0, 7));
+    }
+
+    // 何も無いなら消す
+    if (hashes.length === 0) {
+        info.textContent = "";
+        info.removeAttribute("title");
+        return;
+    }
+
+    // 同じhashが複数版で出ても 1個だけ表示（任意：安全）
+    const uniq = [...new Set(hashes)];
+
+    // ★ 表示：A版/B版の文字は一切出さない
+    info.textContent = uniq.map(x => `[${x}]`).join(" ");
+
+    // フルhashは hover で見えるように
+    info.title = [...new Set(fullHashes)].join("\n");
 }
 
 // ------------------------
