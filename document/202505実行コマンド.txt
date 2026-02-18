@@ -1,0 +1,70 @@
+python manage.py shell -c "from exam2.models import Subject; s=Subject.objects.get(subjectNo='1020201',fsyear=2025); print(s.id,s.subjectNo,s.fsyear,s.term,s.nenji,s.name)"
+
+python manage.py shell -c "
+from exam2.models import Subject,Exam,Question,StudentExam,StudentExamVersion,ExamAdjust
+s=Subject.objects.get(subjectNo='1020201',fsyear=2025)
+ex=Exam.objects.filter(subject=s)
+print('Exam=',ex.count())
+print('Question=',Question.objects.filter(exam__in=ex).count())
+print('SEV=',StudentExamVersion.objects.filter(exam__in=ex).count())
+print('SE=',StudentExam.objects.filter(exam__in=ex).count())
+print('Adjust=',ExamAdjust.objects.filter(exam__in=ex).count())
+"
+
+python manage.py clear_subject_data 1020201
+
+python manage.py shell -c "
+from exam2.models import Subject,Exam,Question,StudentExam,StudentExamVersion,ExamAdjust
+s=Subject.objects.get(subjectNo='1020201',fsyear=2025)
+ex=Exam.objects.filter(subject=s)
+print('Subject=',1)
+print('Exam=',ex.count())
+print('Question=',Question.objects.filter(exam__in=ex).count())
+print('SEV=',StudentExamVersion.objects.filter(exam__in=ex).count())
+print('SE=',StudentExam.objects.filter(exam__in=ex).count())
+print('Adjust=',ExamAdjust.objects.filter(exam__in=ex).count())
+"
+
+python manage.py load_subject_base 1020201
+
+python manage.py shell -c "
+from exam2.models import Subject,Exam
+s=Subject.objects.get(subjectNo='1020201',fsyear=2025)
+print('Subject OK:',s.id,s.term,s.nenji,s.name)
+print('Exam versions:',list(Exam.objects.filter(subject=s).order_by('version').values_list('version',flat=True)))
+"
+
+python manage.py load_questions 1020201 --fsyear 2025 --clear-existing --fix-qno
+
+python manage.py shell -c "
+from exam2.models import Subject,Exam,Question
+s=Subject.objects.get(subjectNo='1020201',fsyear=2025)
+for e in Exam.objects.filter(subject=s).order_by('version'):
+    print(e.version, 'Q=', Question.objects.filter(exam=e).count())
+"
+
+python manage.py load_student_exam_version 1020201 --fsyear 2025 --dry-run
+
+python manage.py load_student_exam_version 1020201 --fsyear 2025 --clear-existing
+
+python manage.py shell -c "
+from exam2.models import Subject,Exam,StudentExamVersion
+s=Subject.objects.get(subjectNo='1020201',fsyear=2025)
+for e in Exam.objects.filter(subject=s).order_by('version'):
+    print(e.version,'SEV=',StudentExamVersion.objects.filter(exam=e).count())
+"
+
+python manage.py load_student_exam 1020201 --fsyear 2025 --dry-run
+
+python manage.py load_student_exam 1020201 --fsyear 2025 --batch-size 2000
+
+python manage.py load_exam_adjust 1020201 --fsyear 2025 --dry-run
+
+python manage.py load_exam_adjust 1020201 --fsyear 2025 --batch-size 2000
+
+python manage.py shell -c "
+from exam2.models import Subject,Exam,ExamAdjust
+s=Subject.objects.get(subjectNo='1020201',fsyear=2025)
+ex=Exam.objects.filter(subject=s)
+print('ExamAdjust total=',ExamAdjust.objects.filter(exam__in=ex).count())
+"
