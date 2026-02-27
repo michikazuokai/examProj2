@@ -85,9 +85,17 @@ class Command(BaseCommand):
         nenji_map = version_data.get(fsyear) or version_data.get(str(fsyear)) or {}
         if not nenji_map:
             raise CommandError(f"YAML に fsyear={fsyear} のブロックがありません: {yaml_path}")
-        vmap = nenji_map.get(nenji) or nenji_map.get(str(nenji))
-        if not vmap:
+
+        grade_map = nenji_map.get(nenji) or nenji_map.get(str(nenji))
+        if not grade_map:
             raise CommandError(f"YAML に nenji={nenji} のブロックがありません（fsyear={fsyear}）: {yaml_path}")
+
+        # ★追加：subjectNo を1段掘る（新YAML）
+        vmap = grade_map.get(subjectNo) or grade_map.get(str(subjectNo))
+        if not vmap:
+            raise CommandError(
+                f"YAML に subjectNo={subjectNo} のブロックがありません（fsyear={fsyear}, nenji={nenji}）: {yaml_path}"
+            )
 
         # ---------- Exam（subject×version）を準備 ----------
         exams = {e.version: e for e in Exam.objects.filter(subject=subject)}
