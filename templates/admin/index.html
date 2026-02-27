@@ -1,0 +1,14 @@
+{% extends "admin/index.html" %}
+
+{% block content %}
+  <div class="module" style="margin-bottom:16px;">
+    <h2>運用メニュー</h2>
+    <ul>
+      <li><a href="{% url 'admin:exam2_subject_changelist' %}">Subject（科目）</a></li>
+      <li><a href="{% url 'admin:exam2_exam_changelist' %}">Exam（試験）</a></li>
+      <li><a href="{% url 'admin:exam2_student_changelist' %}">Student（学生）</a></li>
+      <li><a href="{% url 'manage_stdversion' %}">manage_stdversion（A/B変更）</a></li>
+    </ul>
+  </div>
+{{ block.super }}
+{% endblock %}

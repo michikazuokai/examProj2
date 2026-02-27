@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <title>manage_stdversion</title>
+  <style>
+    body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 24px; }
+    .box { padding: 12px; border: 1px solid #ddd; border-radius: 10px; margin-bottom: 12px; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #ddd; padding: 6px 10px; vertical-align: middle; white-space: nowrap; }
+    th { background:#fafafa; }
+    .muted { color:#666; }
+    .btn { padding: 4px 10px; border: 1px solid #aaa; border-radius: 6px; background: #fff; cursor: pointer; }
+    .changed { background: #fff7cc; } /* 薄い黄色 */
+    .backbtn { display:inline-block; margin-top:16px; }
+  </style>
+</head>
+<body>
+  <h1>manage_stdversion</h1>
+  <div class="box">
+    {% if messages %}
+      {% for m in messages %}
+        <div>{{ m }}</div>
+      {% endfor %}
+    {% endif %}
+  </div>
+  <div class="box">
+    <form method="get" id="subjectForm">
+      {{ form.subject.label_tag }}<br>
+      {{ form.subject }}
+    </form>
+    <a class="btn backbtn" href="{% url 'admin:index' %}">← 管理画面トップへ戻る</a>
+  </div>
+
+  <!-- ✅ 一覧表示エリア（ここを一旦消す／読み込み中表示に使う） -->
+  <div id="listArea">
+    {% if subject %}
+      <table>
+        <thead>
+          <tr>
+            <th>学生</th>
+            <th>A/B</th>
+            <th>点数</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+            <tr class="{% if changed_ids and r.student.id in changed_ids %}changed{% endif %}">
+              <td><b>{{ r.student.stdNo }}</b> <span class="muted">{{ r.student.nickname }}</span></td>
+              <td>{{ r.current_version|default:"-" }}</td>
+              <td><b>{{ r.total_score }}</b></td>
+              <td>
+                <form method="post" action="{% url 'manage_stdversion' %}" style="display:inline;">
+                  {% csrf_token %}
+                  <input type="hidden" name="subject_id" value="{{ subject.id }}">
+                  <input type="hidden" name="student_id" value="{{ r.student.id }}">
+                  <input type="hidden" name="force" value="0">  <!-- ★追加 -->
+
+                  {% if r.current_version == "A" %}
+                    <button class="btn" name="target_version" value="B" type="submit"
+                      onclick="return confirmForce(this.form, '{{ r.student.stdNo }}', '{{ r.student.nickname }}', 'A', 'B');">
+                      Bに変更
+                    </button>
+                  {% elif r.current_version == "B" %}
+                    <button class="btn" name="target_version" value="A" type="submit"
+                      onclick="return confirmForce(this.form, '{{ r.student.stdNo }}', '{{ r.student.nickname }}', 'B', 'A');">
+                      Aに変更
+                    </button>
+                  {% else %}
+                    <button class="btn" name="target_version" value="A" type="submit"
+                      onclick="return confirmForce(this.form, '{{ r.student.stdNo }}', '{{ r.student.nickname }}', '', 'A');">
+                      Aに設定
+                    </button>
+                  {% endif %}
+                </form> 
+              </td>
+            </tr>
+          {% empty %}
+            <tr><td colspan="4">学生が見つかりません。</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <div class="muted">科目を選択してください</div>
+    {% endif %}
+  </div>
+
+  <!-- ✅ ここが「一旦一覧を消す」処理の場所（listAreaを書き換える） -->
+  <script>
+    const subj = document.getElementById("id_subject");
+    const form = document.getElementById("subjectForm");
+    const listArea = document.getElementById("listArea");
+
+    if (subj && form && listArea) {
+      subj.addEventListener("change", () => {
+        // 一旦一覧を消して「読み込み中…」にする
+        listArea.innerHTML = '<div class="box muted">読み込み中...</div>';
+        form.submit();
+      });
+    } else {
+      console.log("DEBUG:", {subj, form, listArea});
+    }
+  function confirmForce(form, stdNo, nickname, fromV, toV) {
+    const fromTxt = fromV ? fromV : "(未割当)";
+    const msg =
+      `学生 ${stdNo} / ${nickname}\n` +
+      `現在: ${fromTxt} → 変更先: ${toV}\n\n` +
+      `【強制変更について】\n` +
+      `点数/補正が入っていても、TF・hosei・adjust を 0 にクリアして切替します。\n\n` +
+      `実行しますか？`;
+
+    if (window.confirm(msg)) {
+      form.force.value = "1";   // ★OKなら強制
+      return true;
+    }
+    // キャンセルなら送信しない
+    return false;
+  }
+  </script>
+
+</body>
+</html>

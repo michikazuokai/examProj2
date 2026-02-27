@@ -4,7 +4,7 @@ from exam2 import views   # ★ index/exam/adjust HTML 用
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-
+    path("manage_stdversion/", views.manage_stdversion, name="manage_stdversion"),
     # ▼ HTML ページ（上に書くこと！）
     # index や adjust などの HTML ページ
     path('', include('exam2.urls')),
