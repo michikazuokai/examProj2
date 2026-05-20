@@ -37,6 +37,8 @@ from .serializers import (
     ExamAdjustSerializer,
 )
 
+from .services import change_student_exam_version
+
 # =========================
 # HTML ページ用 View
 # =========================
@@ -742,104 +744,29 @@ def _students_for_subject(subject: Subject):
 
     return qs
 
-
 @staff_member_required
 def manage_stdversion(request):
     """
-    一覧画面：
-    - GET: subject を選ぶと、その年次の学生一覧を表示
-    - POST: 1学生だけ A/B を変更（痕跡があれば forceなしで拒否）
-      更新対象：SEV / StudentExam / ExamAdjust の exam を新バージョン側へ揃える
-      点数：Σ(TF*points) + Σ(hosei) + adjust（adjustは1件想定）
+    学生ごとのA/B版割り当て一覧画面。
+
+    この段階ではDB更新しない。
+    - 科目選択
+    - 学生一覧表示
+    - A/B/未割当の絞り込み
+    - 確認画面へのリンク表示
+    だけを行う。
     """
 
-    # ---------------------------
-    # POST（1学生のA/B切替）
-    # ---------------------------
     if request.method == "POST":
-        subject_id = request.POST.get("subject_id")
-        student_id = request.POST.get("student_id")
-        target_version = request.POST.get("target_version")  # "A" or "B"
-        force = (request.POST.get("force") == "1")
-
-        subject = Subject.objects.filter(id=subject_id).first()
-        if not subject:
-            messages.error(request, "Subject が見つかりません。")
-            return redirect(reverse("manage_stdversion"))
-
-        student = Student.objects.filter(id=student_id).first()
-        if not student:
-            messages.error(request, "Student が見つかりません。")
-            return redirect(reverse("manage_stdversion") + f"?subject={subject.id}")
-
-        exams = list(Exam.objects.filter(subject=subject).order_by("version"))
-        exam_by_version = {e.version: e for e in exams}
-        if target_version not in exam_by_version:
-            messages.error(request, f"変更先 version が不正です: {target_version}")
-            return redirect(reverse("manage_stdversion") + f"?subject={subject.id}")
-
-        new_exam = exam_by_version[target_version]
-
-        # 現在割当（SEV）確認
-        sev_qs = StudentExamVersion.objects.filter(student=student, exam__subject=subject).select_related("exam")
-        current_version = sev_qs.first().exam.version if sev_qs.exists() else None
-
-        if current_version == target_version:
-            messages.info(request, "変更なし（すでに指定バージョンです）")
-            return redirect(reverse("manage_stdversion") + f"?subject={subject.id}")
-
-        # 既存の関連QS
-        se_qs = StudentExam.objects.filter(student=student, exam__subject=subject)
-        adj_qs = ExamAdjust.objects.filter(student=student, exam__subject=subject)
-
-        # 痕跡チェック（点数が入っているか：あなたの定義）
-        tf_points_expr = ExpressionWrapper(
-            F("TF") * F("question__points"),
-            output_field=IntegerField(),
+        messages.error(
+            request,
+            "この画面から直接変更はできません。確認画面から実行してください。"
         )
-        tf_points_sum = se_qs.aggregate(total=Coalesce(Sum(tf_points_expr), Value(0)))["total"]
-        hosei_sum = se_qs.aggregate(total=Coalesce(Sum("hosei"), Value(0)))["total"]
-        adjust_val = adj_qs.values_list("adjust", flat=True).first() or 0
-        total_score = tf_points_sum + hosei_sum + adjust_val
+        return redirect(reverse("manage_stdversion"))
 
-        # 痕跡あり & forceなし -> ここで止める
-        if total_score != 0 and not force:
-            messages.error(request, f"点数が入っているため更新不可（forceなし）: total={total_score}")
-            return redirect(reverse("manage_stdversion") + f"?subject={subject.id}")
-
-        # --- atomic 更新 ---
-        with transaction.atomic():
-            # SEV 更新/作成
-            if sev_qs.exists():
-                sev_qs.update(exam=new_exam)
-            else:
-                StudentExamVersion.objects.create(student=student, exam=new_exam)
-
-            if force:
-                # ★強制：点数・補正をゼロクリア
-                se_qs.update(TF=0, hosei=0, exam=new_exam)
-                # ExamAdjustは「1件だけ」前提：存在するものは0にして新examへ
-                adj_qs.update(adjust=0, exam=new_exam)
-            else:
-                # 通常：examだけ揃える（痕跡なし前提）
-                se_qs.update(exam=new_exam)
-                adj_qs.update(exam=new_exam)
-
-        # セッションの「修正済み」蓄積（あなたの既存コードがあればそのまま）
-        changed = request.session.get("stdversion_changed_ids", [])
-        if student.id not in changed:
-            changed.append(student.id)
-        request.session["stdversion_changed_ids"] = changed
-        request.session.modified = True
-
-        messages.success(request, f"更新しました: {student.stdNo} {current_version} → {target_version}" + ("（強制0クリア）" if force else ""))
-
-        return redirect(reverse("manage_stdversion") + f"?subject={subject.id}")
-
-    # ---------------------------
-    # GET（一覧表示）
-    # ---------------------------
     form = ManageStdVersionSubjectForm(request.GET or None)
+
+    version_filter = request.GET.get("version_filter", "all")
 
     subject = None
     rows = []
@@ -847,60 +774,87 @@ def manage_stdversion(request):
     if form.is_valid():
         subject = form.cleaned_data.get("subject")
 
-    if request.method == "GET" and request.GET.get("clear") == "1":
+    if request.GET.get("clear") == "1":
         request.session["stdversion_changed_ids"] = []
         request.session.modified = True
 
     if subject:
-
-        # 科目が変わったら「今回修正した学生」マークを自動クリア
         last_subject_id = request.session.get("stdversion_last_subject_id")
+
         if last_subject_id != subject.id:
             request.session["stdversion_changed_ids"] = []
             request.session["stdversion_last_subject_id"] = subject.id
             request.session.modified = True
 
-
-
-
-        # Exam(A/B)を取得（点数計算で「割当examに絞る」ため）
-        exams = list(Exam.objects.filter(subject=subject).order_by("version"))
+        exams = list(
+            Exam.objects
+            .filter(subject=subject)
+            .order_by("version")
+        )
         exam_by_version = {e.version: e for e in exams}
 
         students = list(_students_for_subject(subject))
 
-        # 学生→現在version（SEV）をまとめて取得
         sev_map = {}
         for sev in (
             StudentExamVersion.objects
             .filter(exam__subject=subject, student__in=students)
             .select_related("exam")
         ):
-            sev_map[sev.student_id] = sev.exam.version  # "A"/"B"
+            sev_map[sev.student_id] = sev.exam.version
 
-        # Σ(TF*points) 用
         tf_points_expr = ExpressionWrapper(
             F("TF") * F("question__points"),
             output_field=IntegerField(),
         )
 
         for st in students:
-            current_v = sev_map.get(st.id)  # "A" / "B" / None
+            current_v = sev_map.get(st.id)
 
-            # 点数は「割当済みならその exam のみに絞る」ほうが安全
+            if version_filter == "A" and current_v != "A":
+                continue
+
+            if version_filter == "B" and current_v != "B":
+                continue
+
+            if version_filter == "none" and current_v is not None:
+                continue
+
             target_exam = exam_by_version.get(current_v) if current_v else None
 
             if target_exam:
-                se_qs = StudentExam.objects.filter(student=st, exam=target_exam)
-                adj_qs = ExamAdjust.objects.filter(student=st, exam=target_exam)
+                se_qs = StudentExam.objects.filter(
+                    student=st,
+                    exam=target_exam,
+                )
+                adj_qs = ExamAdjust.objects.filter(
+                    student=st,
+                    exam=target_exam,
+                )
             else:
-                # 未割当時などの例外：subject全体で計算（運用上は未割当を減らす）
-                se_qs = StudentExam.objects.filter(student=st, exam__subject=subject)
-                adj_qs = ExamAdjust.objects.filter(student=st, exam__subject=subject)
+                se_qs = StudentExam.objects.filter(
+                    student=st,
+                    exam__subject=subject,
+                )
+                adj_qs = ExamAdjust.objects.filter(
+                    student=st,
+                    exam__subject=subject,
+                )
 
-            tf_points_sum = se_qs.aggregate(total=Coalesce(Sum(tf_points_expr), Value(0)))["total"]
-            hosei_sum = se_qs.aggregate(total=Coalesce(Sum("hosei"), Value(0)))["total"]
-            adjust_val = adj_qs.values_list("adjust", flat=True).first() or 0  # 1件想定（無ければ0）
+            tf_points_sum = se_qs.aggregate(
+                total=Coalesce(Sum(tf_points_expr), Value(0))
+            )["total"] or 0
+
+            hosei_sum = se_qs.aggregate(
+                total=Coalesce(Sum("hosei"), Value(0))
+            )["total"] or 0
+
+            adjust_val = (
+                adj_qs
+                .values_list("adjust", flat=True)
+                .first()
+                or 0
+            )
 
             total_score = tf_points_sum + hosei_sum + adjust_val
 
@@ -910,17 +864,157 @@ def manage_stdversion(request):
                 "total_score": total_score,
             })
 
-
-
-
     changed_ids = set(request.session.get("stdversion_changed_ids", []))
 
-    ctx = {
+    context = {
         "form": form,
         "subject": subject,
         "rows": rows,
         "changed_ids": changed_ids,
+        "version_filter": version_filter,
     }
-    return render(request, "exam2/manage_stdversion.html", ctx)
 
- 
+    return render(request, "exam2/manage_stdversion.html", context)
+
+@staff_member_required
+def manage_stdversion_confirm(request, subject_id, student_id, target_version):
+    """
+    学生のA/B版変更 確認画面。
+    ここではまだDB更新しない。
+    """
+    subject = get_object_or_404(Subject, id=subject_id)
+    student = get_object_or_404(Student, id=student_id)
+
+    target_version = str(target_version).upper()
+
+    target_exam = get_object_or_404(
+        Exam,
+        subject=subject,
+        version=target_version,
+    )
+
+    current_sev = (
+        StudentExamVersion.objects
+        .filter(student=student, exam__subject=subject)
+        .select_related("exam")
+        .first()
+    )
+
+    current_exam = current_sev.exam if current_sev else None
+    current_version = current_exam.version if current_exam else None
+
+    tf_points_expr = ExpressionWrapper(
+        F("TF") * F("question__points"),
+        output_field=IntegerField(),
+    )
+
+    if current_exam:
+        se_qs = StudentExam.objects.filter(
+            student=student,
+            exam=current_exam,
+        )
+
+        score = se_qs.aggregate(
+            total=Coalesce(Sum(tf_points_expr), Value(0))
+        )["total"]
+
+        hosei = se_qs.aggregate(
+            total=Coalesce(Sum("hosei"), Value(0))
+        )["total"]
+
+        adj = (
+            ExamAdjust.objects
+            .filter(student=student, exam=current_exam)
+            .first()
+        )
+        adjust = adj.adjust if adj else 0
+    else:
+        score = 0
+        hosei = 0
+        adjust = 0
+
+    total = score + hosei + adjust
+
+    context = {
+        "subject": subject,
+        "student": student,
+        "current_exam": current_exam,
+        "current_version": current_version,
+        "target_exam": target_exam,
+        "target_version": target_version,
+        "score": score,
+        "hosei": hosei,
+        "adjust": adjust,
+        "total": total,
+    }
+
+    return render(
+        request,
+        "exam2/manage_stdversion_confirm.html",
+        context,
+    )
+
+@staff_member_required
+def manage_stdversion_execute(request, subject_id, student_id, target_version):
+    """
+    確認画面から実際にA/B版変更を実行する。
+    """
+
+    if request.method != "POST":
+        messages.error(request, "変更処理は確認画面から実行してください。")
+        return redirect(
+            reverse(
+                "manage_stdversion_confirm",
+                args=[subject_id, student_id, target_version],
+            )
+        )
+
+    try:
+        result = change_student_exam_version(
+            subject_id=subject_id,
+            student_id=student_id,
+            target_version=target_version,
+        )
+    except Subject.DoesNotExist:
+        messages.error(request, "Subject が見つかりません。")
+        return redirect(reverse("manage_stdversion"))
+
+    except Student.DoesNotExist:
+        messages.error(request, "Student が見つかりません。")
+        return redirect(reverse("manage_stdversion"))
+
+    except Exam.DoesNotExist:
+        messages.error(request, f"変更先の試験版が見つかりません: {target_version}")
+        return redirect(reverse("manage_stdversion"))
+
+    # 今回変更した学生IDを保存
+    changed = request.session.get("stdversion_changed_ids", [])
+    if result.student.id not in changed:
+        changed.append(result.student.id)
+
+    request.session["stdversion_changed_ids"] = changed
+
+    # 変更前・変更後の情報を保存
+    changed_info = request.session.get("stdversion_changed_info", {})
+    changed_info[str(result.student.id)] = {
+        "from": result.old_version or "未割当",
+        "to": result.new_version,
+    }
+
+    request.session["stdversion_changed_info"] = changed_info
+    request.session["stdversion_last_subject_id"] = result.subject.id
+    request.session.modified = True
+
+    messages.success(
+        request,
+        (
+            f"変更しました: "
+            f"{result.student.stdNo} "
+            f"{result.old_version or '未割当'} → {result.new_version} "
+            f"（採点行 {result.created_student_exam_count} 件を0で作成）"
+        )
+    )
+
+    return redirect(
+        reverse("manage_stdversion") + f"?subject={result.subject.id}"
+    )

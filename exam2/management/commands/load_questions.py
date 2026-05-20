@@ -1,5 +1,6 @@
 # exam2/management/commands/load_questions.py
 import json
+import sys
 from pathlib import Path
 
 from django.conf import settings
@@ -10,9 +11,7 @@ from exam2.models import Subject, Exam, Question
 
 
 class Command(BaseCommand):
-    help = "指定 subjectNo の JSON から Question を作成する（Phase3対応）"
-
-    DEFAULT_JSON_DIR = Path("/Volumes/NBPlan/TTC/examtools/work")
+    help = "指定 subjectNo の JSON から Question を作成する（Phase3対応、YAML動的参照版）"
 
     def add_arguments(self, parser):
         parser.add_argument("subjectNo", type=str)
@@ -21,7 +20,7 @@ class Command(BaseCommand):
             "--json",
             type=str,
             default=None,
-            help="JSON ファイルパス（省略時は answers_<subjectNo>.json）",
+            help="JSON ファイルパス（省略時は YAML から自動解決）",
         )
 
         # Phase3: Subject を (subjectNo, fsyear) で特定
@@ -29,7 +28,7 @@ class Command(BaseCommand):
             "--fsyear",
             type=int,
             default=getattr(settings, "FSYEAR", None),
-            help="年度（省略時は settings.FSYEAR。未設定なら JSON から読みに行く）",
+            help="年度（省略時は settings.FSYEAR。未設定なら自動解決を試みる）",
         )
 
         # 安全系
@@ -53,17 +52,41 @@ class Command(BaseCommand):
         fix_qno = options["fix_qno"]
 
         # ------------------------
-        # JSON パス決定
+        # fsyear の特定
+        # ------------------------
+        fsyear = fsyear_opt if fsyear_opt is not None else getattr(settings, "FSYEAR", None)
+
+        # ------------------------
+        # JSON パス決定（utils.py の動的解決を利用）
         # ------------------------
         if options["json"]:
             json_path = Path(options["json"])
         else:
-            json_path = self.DEFAULT_JSON_DIR / f"answers_{subjectNo}.json"
+            if fsyear is None:
+                raise CommandError(
+                    "fsyear が特定できないため、YAML から JSON パスを逆引きできません。--fsyear を指定してください。"
+                )
+
+            # 5つ上の階層（/TTC）から utils.py の場所を計算してインポート
+            try:
+                current_file = Path(__file__).resolve()
+                ttc_root = current_file.parents[4]
+                ttc_utilpath = ttc_root / "@TTC" / "util"
+
+                if str(ttc_utilpath) not in sys.path:
+                    sys.path.insert(0, str(ttc_utilpath))
+
+                import utils
+
+                # 動的キー取得関数を使って "ans_json" を取得
+                json_path = utils.get_exam_config_path(subjectNo, str(fsyear), "ans_json")
+            except Exception as e:
+                raise CommandError(f"utils.py を経由した YAML からのパス取得に失敗しました: {e}")
 
         if not json_path.exists():
             raise CommandError(f"JSON ファイルが見つかりません: {json_path}")
 
-        self.stdout.write(f"JSON 読み込み: {json_path}")
+        self.stdout.write(f"YAML経由の動的JSON読み込み成功: {json_path}")
 
         # ------------------------
         # JSON 読み込み
@@ -83,10 +106,7 @@ class Command(BaseCommand):
         if json_subject and json_subject != subjectNo:
             raise CommandError(f"subjectNo 不一致: 引数={subjectNo}, JSON={json_subject}")
 
-        # fsyear は (1) オプション→(2) settings→(3) JSON から取得
-        fsyear = fsyear_opt if fsyear_opt is not None else meta.get("fsyear")
-        if fsyear is None:
-            raise CommandError("fsyear が未指定です。--fsyear を指定するか settings.FSYEAR / JSON(meta.fsyear) を用意してください。")
+        # Subject / Exam 取得用の fsyear 確定
         fsyear = int(fsyear)
 
         # ------------------------
@@ -101,20 +121,11 @@ class Command(BaseCommand):
         if not exams:
             raise CommandError("Exam が存在しません（先に load_subject_base.py を実行してください）")
 
-        # ------------------------
-        # 既知の q_no 誤り補正（暫定）
-        #   例：14-1① が 2回出る → 片方は 14-1②
-        #   あなたの export 例から「gyo=6, retu=1 の 14-1①」を 14-1② に置換する想定
-        #   ※必要ならここを増やせます（version別もOK）
-        # ------------------------
         def fix_label(version: str, gyo: int, retu: int, label: str) -> str:
             if not fix_qno:
                 return label
-
-            # A/B 両方に同じ補正を当てる想定
             if label == "14-1①" and gyo == 6 and retu == 1:
                 return "14-1②"
-
             return label
 
         total_created = 0
@@ -137,16 +148,10 @@ class Command(BaseCommand):
             if len(questions) < 2:
                 raise CommandError(f"questions が不足しています: version={version}")
 
-            # ------------------------
-            # 既存削除（推奨）
-            # ------------------------
             if clear_existing:
                 deleted, _ = Question.objects.filter(exam=exam).delete()
                 total_deleted += deleted
 
-            # ------------------------
-            # 基準 height（JSON先頭のベース）
-            # ------------------------
             base_height = questions[0].get("height")
             if not base_height:
                 raise CommandError(f"base height が取得できません: version={version}")
@@ -155,10 +160,6 @@ class Command(BaseCommand):
 
             to_create = []
 
-            # ========================
-            # 行（gyo）ループ
-            # questions[1] 以降が問題本体
-            # ========================
             for gyo_idx, qblock in enumerate(questions[1:], start=1):
                 widths = qblock.get("width") or []
                 labels = qblock.get("label") or []
@@ -169,7 +170,6 @@ class Command(BaseCommand):
 
                 count = len(labels)
 
-                # 安全チェック
                 if not all(len(lst) == count for lst in [widths, answers, heights, points, koumokus]):
                     raise CommandError(f"配列長不一致: version={version}, gyo={gyo_idx}")
 
@@ -178,7 +178,6 @@ class Command(BaseCommand):
                     label = str(labels[i] or "").strip()
                     label = fix_label(version, gyo_idx, retu, label)
 
-                    # height倍率（0除算対策）
                     try:
                         h_ratio = int(int(heights[i]) / int(base_height))
                     except Exception:

@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <title>A/B版変更確認</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      margin: 24px;
+    }
+    .box {
+      padding: 16px;
+      border: 1px solid #ddd;
+      border-radius: 10px;
+      margin-bottom: 16px;
+    }
+    .danger {
+      border-color: #e0a0a0;
+      background: #fff5f5;
+    }
+    .btn {
+      display: inline-block;
+      padding: 6px 14px;
+      border: 1px solid #aaa;
+      border-radius: 6px;
+      background: #fff;
+      cursor: pointer;
+      text-decoration: none;
+      color: #000;
+      font-size: 14px;
+    }
+    .btn-danger {
+      background: #c62828;
+      color: white;
+      border-color: #c62828;
+    }
+    table {
+      border-collapse: collapse;
+      margin-top: 8px;
+    }
+    th, td {
+      border: 1px solid #ddd;
+      padding: 6px 12px;
+      text-align: left;
+    }
+    th {
+      background: #fafafa;
+    }
+  </style>
+</head>
+<body>
+
+<h1>A/B版変更確認</h1>
+
+<div class="box">
+  <p><b>科目：</b>{{ subject.subjectNo }} {{ subject.name }}（{{ subject.fsyear }}年度）</p>
+  <p><b>学生：</b>{{ student.stdNo }} {{ student.nickname }}</p>
+  <p><b>現在の版：</b>{{ current_version|default:"未割当" }}</p>
+  <p><b>変更後の版：</b>{{ target_version }}</p>
+</div>
+
+<div class="box">
+  <h2>現在の点数</h2>
+  <table>
+    <tr>
+      <th>得点</th>
+      <th>問題別補正</th>
+      <th>試験全体補正</th>
+      <th>合計</th>
+    </tr>
+    <tr>
+      <td>{{ score }}</td>
+      <td>{{ hosei }}</td>
+      <td>{{ adjust }}</td>
+      <td><b>{{ total }}</b></td>
+    </tr>
+  </table>
+</div>
+
+<div class="box danger">
+  <h2>注意</h2>
+  <p>
+    この操作を行うと、この学生の現在の採点結果と補正は削除されます。
+  </p>
+  <p>
+    変更後の {{ target_version }} 版の問題に合わせて、
+    StudentExam を TF=0、hosei=0 で作り直します。
+  </p>
+  <p>
+    ExamAdjust も adjust=0 で作り直します。
+  </p>
+</div>
+
+<form method="post"
+      action="{% url 'manage_stdversion_execute' subject.id student.id target_version %}">
+  {% csrf_token %}
+
+  <button type="submit" class="btn btn-danger">
+    変更する
+  </button>
+
+  <a class="btn" href="{% url 'manage_stdversion' %}?subject={{ subject.id }}">
+    キャンセル
+  </a>
+</form>
+
+</body>
+</html>

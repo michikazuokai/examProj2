@@ -2,21 +2,75 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8">
-  <title>manage_stdversion</title>
+  <title>A版・B版変更</title>
+
   <style>
-    body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 24px; }
-    .box { padding: 12px; border: 1px solid #ddd; border-radius: 10px; margin-bottom: 12px; }
-    table { border-collapse: collapse; width: 100%; }
-    th, td { border: 1px solid #ddd; padding: 6px 10px; vertical-align: middle; white-space: nowrap; }
-    th { background:#fafafa; }
-    .muted { color:#666; }
-    .btn { padding: 4px 10px; border: 1px solid #aaa; border-radius: 6px; background: #fff; cursor: pointer; }
-    .changed { background: #fff7cc; } /* 薄い黄色 */
-    .backbtn { display:inline-block; margin-top:16px; }
+    body {
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      margin: 24px;
+    }
+
+    .box {
+      padding: 12px;
+      border: 1px solid #ddd;
+      border-radius: 10px;
+      margin-bottom: 12px;
+    }
+
+    table {
+      border-collapse: collapse;
+      width: 100%;
+    }
+
+    th, td {
+      border: 1px solid #ddd;
+      padding: 6px 10px;
+      vertical-align: middle;
+      white-space: nowrap;
+    }
+
+    th {
+      background: #fafafa;
+    }
+
+    .muted {
+      color: #666;
+    }
+
+    .btn {
+      padding: 4px 10px;
+      border: 1px solid #aaa;
+      border-radius: 6px;
+      background: #fff;
+      cursor: pointer;
+      text-decoration: none;
+      color: #000;
+      display: inline-block;
+    }
+
+    .changed {
+      background: #fff7cc;
+    }
+
+    .backbtn {
+      display: inline-block;
+      margin-top: 16px;
+    }
+
+    .header-select {
+      font-size: 14px;
+      padding: 3px 6px;
+    }
+
+    .toolbar {
+      margin-bottom: 10px;
+    }
   </style>
 </head>
+
 <body>
-  <h1>manage_stdversion</h1>
+  <h1>A版・B版変更</h1>
+
   <div class="box">
     {% if messages %}
       {% for m in messages %}
@@ -24,100 +78,151 @@
       {% endfor %}
     {% endif %}
   </div>
+
   <div class="box">
     <form method="get" id="subjectForm">
       {{ form.subject.label_tag }}<br>
       {{ form.subject }}
+
+      <noscript>
+        <br><br>
+        <button class="btn" type="submit">表示</button>
+      </noscript>
     </form>
-    <a class="btn backbtn" href="{% url 'admin:index' %}">← 管理画面トップへ戻る</a>
+
+    <a class="btn backbtn" href="{% url 'admin:index' %}">
+      ← 管理画面トップへ戻る
+    </a>
   </div>
 
-  <!-- ✅ 一覧表示エリア（ここを一旦消す／読み込み中表示に使う） -->
   <div id="listArea">
     {% if subject %}
+
+      <div class="toolbar">
+        <a class="btn"
+           href="{% url 'manage_stdversion' %}?subject={{ subject.id }}&version_filter={{ version_filter }}&clear=1">
+          変更表示をクリア
+        </a>
+      </div>
+
       <table>
         <thead>
           <tr>
             <th>学生</th>
-            <th>A/B</th>
+
+            <th>
+              <form method="get" id="versionFilterForm" style="margin:0;">
+                <input type="hidden" name="subject" value="{{ subject.id }}">
+
+                <select name="version_filter" id="version_filter" class="header-select">
+                  <option value="all" {% if version_filter == "all" %}selected{% endif %}>
+                    A/B
+                  </option>
+                  <option value="A" {% if version_filter == "A" %}selected{% endif %}>
+                    Aのみ
+                  </option>
+                  <option value="B" {% if version_filter == "B" %}selected{% endif %}>
+                    Bのみ
+                  </option>
+                  <option value="none" {% if version_filter == "none" %}selected{% endif %}>
+                    未割当
+                  </option>
+                </select>
+              </form>
+            </th>
+
             <th>点数</th>
             <th>操作</th>
           </tr>
         </thead>
+
         <tbody>
           {% for r in rows %}
             <tr class="{% if changed_ids and r.student.id in changed_ids %}changed{% endif %}">
-              <td><b>{{ r.student.stdNo }}</b> <span class="muted">{{ r.student.nickname }}</span></td>
-              <td>{{ r.current_version|default:"-" }}</td>
-              <td><b>{{ r.total_score }}</b></td>
               <td>
-                <form method="post" action="{% url 'manage_stdversion' %}" style="display:inline;">
-                  {% csrf_token %}
-                  <input type="hidden" name="subject_id" value="{{ subject.id }}">
-                  <input type="hidden" name="student_id" value="{{ r.student.id }}">
-                  <input type="hidden" name="force" value="0">  <!-- ★追加 -->
+                <b>{{ r.student.stdNo }}</b>
+                <span class="muted">{{ r.student.nickname }}</span>
+              </td>
 
-                  {% if r.current_version == "A" %}
-                    <button class="btn" name="target_version" value="B" type="submit"
-                      onclick="return confirmForce(this.form, '{{ r.student.stdNo }}', '{{ r.student.nickname }}', 'A', 'B');">
-                      Bに変更
-                    </button>
-                  {% elif r.current_version == "B" %}
-                    <button class="btn" name="target_version" value="A" type="submit"
-                      onclick="return confirmForce(this.form, '{{ r.student.stdNo }}', '{{ r.student.nickname }}', 'B', 'A');">
-                      Aに変更
-                    </button>
-                  {% else %}
-                    <button class="btn" name="target_version" value="A" type="submit"
-                      onclick="return confirmForce(this.form, '{{ r.student.stdNo }}', '{{ r.student.nickname }}', '', 'A');">
-                      Aに設定
-                    </button>
-                  {% endif %}
-                </form> 
+              <td>
+                {{ r.current_version|default:"-" }}
+              </td>
+
+              <td>
+                <b>{{ r.total_score }}</b>
+              </td>
+
+              <td>
+                {% if r.current_version == "A" %}
+                  <a class="btn"
+                     href="{% url 'manage_stdversion_confirm' subject.id r.student.id 'B' %}">
+                    Bに変更
+                  </a>
+
+                {% elif r.current_version == "B" %}
+                  <a class="btn"
+                     href="{% url 'manage_stdversion_confirm' subject.id r.student.id 'A' %}">
+                    Aに変更
+                  </a>
+
+                {% else %}
+                  <a class="btn"
+                     href="{% url 'manage_stdversion_confirm' subject.id r.student.id 'A' %}">
+                    Aに設定
+                  </a>
+
+                  <a class="btn"
+                     href="{% url 'manage_stdversion_confirm' subject.id r.student.id 'B' %}">
+                    Bに設定
+                  </a>
+                {% endif %}
               </td>
             </tr>
           {% empty %}
-            <tr><td colspan="4">学生が見つかりません。</td></tr>
+            <tr>
+              <td colspan="4">学生が見つかりません。</td>
+            </tr>
           {% endfor %}
         </tbody>
       </table>
+
     {% else %}
       <div class="muted">科目を選択してください</div>
     {% endif %}
   </div>
 
-  <!-- ✅ ここが「一旦一覧を消す」処理の場所（listAreaを書き換える） -->
   <script>
     const subj = document.getElementById("id_subject");
-    const form = document.getElementById("subjectForm");
+    const subjectForm = document.getElementById("subjectForm");
+
+    const versionFilter = document.getElementById("version_filter");
+    const versionFilterForm = document.getElementById("versionFilterForm");
+
     const listArea = document.getElementById("listArea");
 
-    if (subj && form && listArea) {
-      subj.addEventListener("change", () => {
-        // 一旦一覧を消して「読み込み中…」にする
+    function showLoading() {
+      if (listArea) {
         listArea.innerHTML = '<div class="box muted">読み込み中...</div>';
-        form.submit();
+      }
+    }
+
+    if (subj && subjectForm) {
+      subj.addEventListener("change", () => {
+        showLoading();
+        subjectForm.submit();
       });
-    } else {
-      console.log("DEBUG:", {subj, form, listArea});
     }
-  function confirmForce(form, stdNo, nickname, fromV, toV) {
-    const fromTxt = fromV ? fromV : "(未割当)";
-    const msg =
-      `学生 ${stdNo} / ${nickname}\n` +
-      `現在: ${fromTxt} → 変更先: ${toV}\n\n` +
-      `【強制変更について】\n` +
-      `点数/補正が入っていても、TF・hosei・adjust を 0 にクリアして切替します。\n\n` +
-      `実行しますか？`;
 
-    if (window.confirm(msg)) {
-      form.force.value = "1";   // ★OKなら強制
-      return true;
+    if (versionFilter && versionFilterForm) {
+      versionFilter.addEventListener("change", () => {
+        /*
+          versionFilterForm は listArea の中にある。
+          showLoading() で listArea を書き換えるとフォーム自身が消える。
+          そのため、A/B絞り込みでは showLoading() を呼ばない。
+        */
+        versionFilterForm.submit();
+      });
     }
-    // キャンセルなら送信しない
-    return false;
-  }
   </script>
-
 </body>
 </html>

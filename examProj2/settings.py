@@ -134,5 +134,5 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 ENVIRONMENT = "テスト"
 
-FSYEAR = 2025
-TERM = 4
+FSYEAR = 2026
+TERM = 1
